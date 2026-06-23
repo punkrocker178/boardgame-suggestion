@@ -1,0 +1,20 @@
+{
+  "dbcode.connections": [
+    {
+      "connectionId": "3m0yJgPE6Mfp2HLKJz9-X",
+      "name": "boardgame-chroma",
+      "driver": "sqlite",
+      "connectionType": "socket",
+      "socket": "simple-langchain-app/data/chroma/chroma.sqlite3",
+      "readOnly": true,
+      "postConnectionSqlType": "inline",
+      "driverOptions": {
+        "extensions": []
+      },
+      "idleTimeout": 0,
+      "introspection": {
+        "progressive": false
+      }
+    }
+  ]
+}
