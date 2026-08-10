@@ -9,6 +9,7 @@ from app.db.models import CrawlStatus, Game, GameCategory
 from app.ingest import (
     IngestError,
     compute_games_watermark,
+    ingest_games,
     load_games_for_rag,
     rows_to_documents,
 )
@@ -113,3 +114,39 @@ def test_rows_to_documents_metadata() -> None:
     assert "Catan" in docs[0].page_content
     assert docs[0].metadata["min_players"] == 3
     assert docs[0].metadata["categories"] == "strategy,economic"
+
+
+def test_ingest_indexes_correct_count(db_session: Session, tmp_path: Path) -> None:
+    _seed_eligible(db_session)
+    chroma_dir = tmp_path / "chroma"
+    result = ingest_games(db_session, chroma_dir, FakeEmbeddings(size=8))
+    assert result.indexed_count == 1
+    assert result.skipped is False
+    assert (chroma_dir / ".games_db_watermark").exists()
+
+
+def test_ingest_skips_unchanged_watermark(db_session: Session, tmp_path: Path) -> None:
+    _seed_eligible(db_session)
+    chroma_dir = tmp_path / "chroma"
+    embeddings = FakeEmbeddings(size=8)
+    first = ingest_games(db_session, chroma_dir, embeddings)
+    second = ingest_games(db_session, chroma_dir, embeddings)
+    assert first.skipped is False
+    assert second.skipped is True
+    assert second.indexed_count == 1
+
+
+def test_ingest_reindexes_when_watermark_changes(
+    db_session: Session, tmp_path: Path
+) -> None:
+    game = _seed_eligible(db_session)
+    chroma_dir = tmp_path / "chroma"
+    embeddings = FakeEmbeddings(size=8)
+    first = ingest_games(db_session, chroma_dir, embeddings)
+    game.name = "Brass: Birmingham (Revised)"
+    game.updated_at = datetime(2026, 8, 10, tzinfo=UTC)
+    db_session.commit()
+    second = ingest_games(db_session, chroma_dir, embeddings)
+    assert first.skipped is False
+    assert second.skipped is False
+    assert second.indexed_count == 1

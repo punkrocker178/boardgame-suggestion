@@ -1,5 +1,3 @@
-import csv
-import hashlib
 import logging
 from dataclasses import dataclass
 from datetime import datetime
@@ -24,7 +22,6 @@ REQUIRED_COLUMNS = [
 ]
 ALLOWED_COMPLEXITY = {"light", "medium", "heavy"}
 COLLECTION_NAME = "board_games"
-HASH_FILENAME = ".games_csv_hash"
 WATERMARK_FILENAME = ".games_db_watermark"
 
 logger = logging.getLogger(__name__)
@@ -38,14 +35,6 @@ class IngestError(Exception):
 class IngestResult:
     indexed_count: int
     skipped: bool
-
-
-def _hash_file(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
-def _hash_path(chroma_dir: Path) -> Path:
-    return chroma_dir / HASH_FILENAME
 
 
 def _document_text(row: dict[str, str]) -> str:
@@ -76,31 +65,6 @@ def validate_row(row: dict[str, str], line_number: int) -> None:
     complexity = row.get("complexity", "").strip()
     if complexity and complexity not in ALLOWED_COMPLEXITY:
         raise IngestError(f"Line {line_number}: invalid complexity '{complexity}'")
-
-
-def load_games_csv(csv_path: Path) -> list[dict[str, str]]:
-    if not csv_path.exists():
-        raise IngestError(f"CSV file not found: {csv_path}")
-
-    with csv_path.open(newline="", encoding="utf-8") as handle:
-        reader = csv.DictReader(handle)
-        if reader.fieldnames is None:
-            raise IngestError("CSV has no header row")
-
-        missing = set(REQUIRED_COLUMNS) - set(reader.fieldnames)
-        if missing:
-            raise IngestError(f"CSV missing required columns: {sorted(missing)}")
-
-        rows: list[dict[str, str]] = []
-        for line_number, row in enumerate(reader, start=2):
-            validate_row(row, line_number)
-            rows.append(row)
-
-    if not rows:
-        raise IngestError("CSV contains no game rows")
-
-    logger.debug("Loaded %d games from %s", len(rows), csv_path)
-    return rows
 
 
 def _eligible_games_filters():
@@ -190,26 +154,34 @@ def rows_to_documents(rows: list[dict[str, str]]) -> list[Document]:
     return documents
 
 
+def _watermark_path(chroma_dir: Path) -> Path:
+    return chroma_dir / WATERMARK_FILENAME
+
+
 def ingest_games(
-    csv_path: Path,
+    session: Session,
     chroma_dir: Path,
     embeddings: Embeddings,
     *,
     force: bool = False,
 ) -> IngestResult:
     chroma_dir.mkdir(parents=True, exist_ok=True)
-    current_hash = _hash_file(csv_path)
-    hash_file = _hash_path(chroma_dir)
+    current_watermark = compute_games_watermark(session)
+    watermark_file = _watermark_path(chroma_dir)
 
-    if not force and hash_file.exists() and hash_file.read_text().strip() == current_hash:
-        rows = load_games_csv(csv_path)
+    if (
+        not force
+        and watermark_file.exists()
+        and watermark_file.read_text().strip() == current_watermark
+    ):
+        rows = load_games_for_rag(session)
         logger.info(
-            "Skipping re-index for %s; hash unchanged (%d games)", csv_path, len(rows)
+            "Skipping re-index; DB watermark unchanged (%d games)", len(rows)
         )
         return IngestResult(indexed_count=len(rows), skipped=True)
 
-    logger.info("Indexing games from %s into %s", csv_path, chroma_dir)
-    rows = load_games_csv(csv_path)
+    logger.info("Indexing games from database into %s", chroma_dir)
+    rows = load_games_for_rag(session)
     documents = rows_to_documents(rows)
 
     Chroma.from_documents(
@@ -219,8 +191,12 @@ def ingest_games(
         persist_directory=str(chroma_dir),
     )
 
-    hash_file.write_text(current_hash)
-    logger.info("Indexed %d games into Chroma collection %s", len(documents), COLLECTION_NAME)
+    watermark_file.write_text(current_watermark)
+    logger.info(
+        "Indexed %d games into Chroma collection %s",
+        len(documents),
+        COLLECTION_NAME,
+    )
     return IngestResult(indexed_count=len(documents), skipped=False)
 
 
