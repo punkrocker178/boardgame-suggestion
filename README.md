@@ -32,6 +32,8 @@ docker compose -f docker-compose.yml up --build
 
 Schema is applied automatically on first Postgres volume init via `scripts/schema.sql`.
 
+Database ops (BGG dump import, backup, restore): [docs/database.md](docs/database.md).
+
 ## API
 
 ### `GET /health`
@@ -53,14 +55,19 @@ Returns ranked recommendations with reasoning and applied filters.
 | `LLM_PROVIDER` | `openrouter` | `openrouter`, `openai`, or `ollama` |
 | `EMBEDDING_PROVIDER` | `openrouter` | Same options as LLM |
 | `OPENROUTER_API_KEY` | — | API key for OpenRouter |
-| `GAMES_CSV_PATH` | `./data/games.csv` | Path to games dataset |
+| `DATABASE_URL` | see `.env.example` | Postgres URL (host scripts use `localhost:5434`) |
 | `CHROMA_PERSIST_DIR` | `./data/chroma` | Chroma persistence directory |
 
 See `.env.example` for all options.
 
 ## Data
 
-Replace `data/games.csv` or point `GAMES_CSV_PATH` at your own file. The app re-indexes automatically when the file hash changes.
+1. Start Postgres (`docker compose up -d db`).
+2. Import a BGG ranks dump (`python scripts/import_bgg_dump.py --csv ...`).
+3. Crawl metadata (`python scripts/crawl_bgg_metadata.py`).
+4. Start the API — it re-indexes Chroma when the DB watermark (eligible count + max `updated_at`) changes.
+
+See [docs/database.md](docs/database.md).
 
 ## Testing
 
