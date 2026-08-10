@@ -1,36 +1,65 @@
+from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 from langchain_core.embeddings import FakeEmbeddings
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
+from app.db.models import Base, CrawlStatus, Game, GameCategory
 from app.main import app, app_state
-from app.models import ExtractedFilters, FiltersApplied, GameRecommendation
+from app.models import ExtractedFilters, GameRecommendation
 from app.recommender import SynthesisOutput
 
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
-    csv_path = tmp_path / "games.csv"
-    csv_path.write_text(
-        "name,description,min_players,max_players,play_time_minutes,categories,complexity\n"
-        "Catan,Trade and build,3,4,90,strategy,medium\n"
-    )
     chroma_dir = tmp_path / "chroma"
-
-    monkeypatch.setenv("GAMES_CSV_PATH", str(csv_path))
     monkeypatch.setenv("CHROMA_PERSIST_DIR", str(chroma_dir))
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
 
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    with factory() as session:
+        game = Game(
+            id=1,
+            name="Catan",
+            rank=1,
+            is_expansion=False,
+            crawl_status=CrawlStatus.COMPLETED,
+            description="Trade and build",
+            min_players=3,
+            max_players=4,
+            playing_time=90,
+            weight=2.3,
+            crawled_at=datetime.now(UTC),
+        )
+        game.categories.append(GameCategory(category="Strategy"))
+        session.add(game)
+        session.commit()
+
     from app.config import get_settings
+    from app.db import engine as db_engine
 
     get_settings.cache_clear()
+    db_engine.get_engine.cache_clear()
+    db_engine.get_session_factory.cache_clear()
 
-    with patch("app.main.get_embeddings", return_value=FakeEmbeddings(size=8)):
-        with TestClient(app) as test_client:
-            yield test_client
+    with patch("app.main.get_session_factory", return_value=factory):
+        with patch("app.main.get_embeddings", return_value=FakeEmbeddings(size=8)):
+            with TestClient(app) as test_client:
+                yield test_client
 
     get_settings.cache_clear()
+    db_engine.get_engine.cache_clear()
+    db_engine.get_session_factory.cache_clear()
 
 
 def test_health_ok(client: TestClient) -> None:
