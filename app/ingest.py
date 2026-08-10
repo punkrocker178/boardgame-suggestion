@@ -2,11 +2,17 @@ import csv
 import hashlib
 import logging
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session, selectinload
+
+from app.bgg.parser import complexity_from_weight
+from app.db.models import CrawlStatus, Game
 
 REQUIRED_COLUMNS = [
     "name",
@@ -19,6 +25,7 @@ REQUIRED_COLUMNS = [
 ALLOWED_COMPLEXITY = {"light", "medium", "heavy"}
 COLLECTION_NAME = "board_games"
 HASH_FILENAME = ".games_csv_hash"
+WATERMARK_FILENAME = ".games_db_watermark"
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +101,72 @@ def load_games_csv(csv_path: Path) -> list[dict[str, str]]:
 
     logger.debug("Loaded %d games from %s", len(rows), csv_path)
     return rows
+
+
+def _eligible_games_filters():
+    return (
+        Game.crawl_status == CrawlStatus.COMPLETED,
+        Game.is_expansion.is_(False),
+        Game.min_players.is_not(None),
+        Game.max_players.is_not(None),
+        Game.playing_time.is_not(None),
+    )
+
+
+def _eligible_games_stmt():
+    return (
+        select(Game)
+        .options(selectinload(Game.categories))
+        .where(*_eligible_games_filters())
+        .order_by(Game.rank.asc().nulls_last(), Game.name.asc())
+    )
+
+
+def _game_to_row(game: Game) -> dict[str, str]:
+    description = game.description or game.name
+    categories = ",".join(
+        category.category.lower().replace(" ", "_") for category in game.categories
+    )
+    complexity = complexity_from_weight(
+        float(game.weight) if game.weight is not None else None
+    )
+    row = {
+        "name": game.name,
+        "description": description,
+        "min_players": str(game.min_players),
+        "max_players": str(game.max_players),
+        "play_time_minutes": str(game.playing_time),
+        "categories": categories or "strategy",
+    }
+    if complexity:
+        row["complexity"] = complexity
+    return row
+
+
+def load_games_for_rag(session: Session) -> list[dict[str, str]]:
+    games = session.scalars(_eligible_games_stmt()).all()
+    if not games:
+        raise IngestError(
+            "No eligible games in database; run import + crawl before starting the API"
+        )
+    rows: list[dict[str, str]] = []
+    for index, game in enumerate(games, start=1):
+        row = _game_to_row(game)
+        validate_row(row, index)
+        rows.append(row)
+    logger.debug("Loaded %d eligible games from database", len(rows))
+    return rows
+
+
+def compute_games_watermark(session: Session) -> str:
+    filters = _eligible_games_filters()
+    count = session.scalar(select(func.count()).select_from(Game).where(*filters))
+    max_updated = session.scalar(select(func.max(Game.updated_at)).where(*filters))
+    if isinstance(max_updated, datetime):
+        stamp = max_updated.isoformat()
+    else:
+        stamp = ""
+    return f"{int(count or 0)}:{stamp}"
 
 
 def rows_to_documents(rows: list[dict[str, str]]) -> list[Document]:
