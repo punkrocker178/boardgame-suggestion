@@ -8,6 +8,7 @@ from langchain_core.language_models import BaseChatModel
 from openai import APIConnectionError, APIStatusError
 
 from app.config import Settings, get_embeddings, get_llm, get_settings
+from app.db.engine import get_session_factory
 from app.ingest import IngestError, get_vector_store, ingest_games
 from app.logging_config import configure_logging
 from app.models import HealthResponse, RecommendRequest, RecommendResponse
@@ -30,14 +31,18 @@ app_state = AppState()
 
 
 def _run_indexing(settings: Settings) -> None:
-    csv_path = Path(settings.games_csv_path)
     chroma_dir = Path(settings.chroma_persist_dir)
     embeddings = get_embeddings(settings)
-    result = ingest_games(csv_path, chroma_dir, embeddings)
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        result = ingest_games(session, chroma_dir, embeddings)
     app_state.indexed_games = result.indexed_count
     app_state.indexing_ok = True
     if result.skipped:
-        logger.info("Skipped re-index; CSV unchanged (%d games)", result.indexed_count)
+        logger.info(
+            "Skipped re-index; DB watermark unchanged (%d games)",
+            result.indexed_count,
+        )
     else:
         logger.info("Indexed %d games into Chroma", result.indexed_count)
 
@@ -51,9 +56,10 @@ async def lifespan(_: FastAPI):
     try:
         _run_indexing(app_state.settings)
     except IngestError:
-        logger.exception("Failed to index games CSV")
+        logger.exception("Failed to index games from database")
         app_state.indexing_ok = False
         app_state.indexed_games = 0
+        raise
     yield
 
 

@@ -30,9 +30,13 @@ class Settings(BaseSettings):
     ollama_model: str = "llama3"
     ollama_embedding_model: str = "nomic-embed-text"
 
-    games_csv_path: str = "./data/games.csv"
     chroma_persist_dir: str = "./data/chroma"
     log_level: str = "INFO"
+
+    database_url: str = "postgresql+psycopg://localhost/boardgame_suggestion"
+    bgg_api_token: str | None = None
+    bgg_request_delay_seconds: float = 5.0
+    bgg_batch_size: int = 20
 
 
 @lru_cache
