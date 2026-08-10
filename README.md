@@ -13,6 +13,25 @@ cp .env.example .env
 uvicorn app.main:app --reload
 ```
 
+## Docker Compose
+
+```bash
+cp .env.example .env
+# Edit .env: set OPENROUTER_API_KEY and Postgres credentials
+docker compose up --build
+```
+
+- API: http://localhost:8000
+- Postgres (host): `localhost:5434` (use `DATABASE_URL` from `.env` for scripts)
+
+Production-like (no reload / no source mount):
+
+```bash
+docker compose -f docker-compose.yml up --build
+```
+
+Schema is applied automatically on first Postgres volume init via `scripts/schema.sql`.
+
 ## API
 
 ### `GET /health`
