@@ -16,5 +16,6 @@
         "progressive": false
       }
     }
-  ]
+  ],
+  "python.languageServer": "None"
 }
