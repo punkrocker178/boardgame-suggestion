@@ -1,0 +1,14 @@
+.venv/
+.git/
+.pytest_cache/
+__pycache__/
+*.py[cod]
+.env
+data/chroma/
+docs/
+*.md
+boardgames_ranks.csv
+.vscode/
+pytest-cache-files-*/
+.coverage
+htmlcov/
