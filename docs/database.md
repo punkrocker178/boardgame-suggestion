@@ -28,6 +28,14 @@ docker compose down -v
 docker compose up -d db
 ```
 
+### Taxonomy FK + poll-summary migration (existing DBs)
+
+If the database was created before categories/mechanics lookup tables and poll arrays:
+
+1. Apply `scripts/migrate_taxonomy_poll_summary.sql` (drops old string junctions, adds FK junctions + array columns, resets `crawl_status` to `pending`).
+2. Run `python scripts/crawl_bgg_metadata.py` — restart alone is not enough.
+3. Fresh installs: use updated `scripts/schema.sql` + import dump + crawl; skip the migrate script.
+
 ## Import BGG dump
 
 Download a BGG ranks CSV (e.g. `boardgames_ranks.csv`), then:
