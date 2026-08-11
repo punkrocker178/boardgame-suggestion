@@ -5,7 +5,7 @@ import pytest
 from langchain_core.embeddings import FakeEmbeddings
 from sqlalchemy.orm import Session
 
-from app.db.models import CrawlStatus, Game, GameCategory
+from app.db.models import Category, CrawlStatus, Game, GameCategory
 from app.ingest import (
     IngestError,
     compute_games_watermark,
@@ -30,7 +30,9 @@ def _seed_eligible(session: Session) -> Game:
         crawled_at=datetime.now(UTC),
         updated_at=datetime(2026, 8, 1, tzinfo=UTC),
     )
-    game.categories.append(GameCategory(category="Economic"))
+    session.add(Category(id=1021, name="Economic"))
+    session.flush()
+    game.categories.append(GameCategory(category_id=1021))
     session.add(game)
     session.commit()
     return game

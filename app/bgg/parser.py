@@ -6,6 +6,9 @@ from xml.etree import ElementTree as ET
 
 Complexity = Literal["light", "medium", "heavy"]
 
+_EN_DASH = "\u2013"
+_RANGE_RE = re.compile(rf"(\d+)\s*(?:{_EN_DASH}|-)\s*(\d+)")
+
 
 @dataclass
 class BggThingData:
@@ -20,8 +23,10 @@ class BggThingData:
     weight: float | None = None
     thumbnail_url: str | None = None
     image_url: str | None = None
-    categories: list[str] = field(default_factory=list)
-    mechanics: list[str] = field(default_factory=list)
+    categories: list[tuple[int, str]] = field(default_factory=list)
+    mechanics: list[tuple[int, str]] = field(default_factory=list)
+    best_with_players: list[int] | None = None
+    recommended_with_players: list[int] | None = None
 
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
@@ -93,6 +98,27 @@ def complexity_from_weight(weight: float | None) -> Complexity | None:
     return "heavy"
 
 
+def parse_player_count_summary(value: str | None) -> list[int] | None:
+    if not value or not value.strip():
+        return None
+    # Drop N+ tokens (e.g. "7+") — do not invent an open-ended count
+    cleaned = re.sub(r"\d+\s*\+", " ", value)
+    numbers: set[int] = set()
+    for match in _RANGE_RE.finditer(cleaned):
+        low, high = int(match.group(1)), int(match.group(2))
+        if low < 1 or low > high:
+            continue
+        numbers.update(range(low, high + 1))
+    without_ranges = _RANGE_RE.sub(" ", cleaned)
+    for match in re.finditer(r"\d+", without_ranges):
+        n = int(match.group(0))
+        if n >= 1:
+            numbers.add(n)
+    if not numbers:
+        return None
+    return sorted(numbers)
+
+
 def _parse_item(item: ET.Element) -> BggThingData:
     game_id = int(item.attrib["id"])
     min_play_time = _child_int(item, "minplaytime")
@@ -106,17 +132,33 @@ def _parse_item(item: ET.Element) -> BggThingData:
             weight_el.attrib.get("value") if "value" in weight_el.attrib else weight_el.text
         )
 
-    categories: list[str] = []
-    mechanics: list[str] = []
+    categories: list[tuple[int, str]] = []
+    mechanics: list[tuple[int, str]] = []
     for link in item.findall("link"):
         link_type = link.attrib.get("type")
         value = link.attrib.get("value")
-        if not value:
+        raw_id = link.attrib.get("id")
+        if not value or not raw_id:
+            continue
+        link_id = _int_or_none(raw_id)
+        if link_id is None:
             continue
         if link_type == "boardgamecategory":
-            categories.append(value)
+            categories.append((link_id, value))
         elif link_type == "boardgamemechanic":
-            mechanics.append(value)
+            mechanics.append((link_id, value))
+
+    best_with = None
+    recommended_with = None
+    summary = item.find("poll-summary[@name='suggested_numplayers']")
+    if summary is not None:
+        for result in summary.findall("result"):
+            name = result.attrib.get("name")
+            parsed = parse_player_count_summary(result.attrib.get("value"))
+            if name == "bestwith":
+                best_with = parsed
+            elif name == "recommmendedwith":
+                recommended_with = parsed
 
     return BggThingData(
         id=game_id,
@@ -132,6 +174,8 @@ def _parse_item(item: ET.Element) -> BggThingData:
         image_url=_child_text(item, "image"),
         categories=categories,
         mechanics=mechanics,
+        best_with_players=best_with,
+        recommended_with_players=recommended_with,
     )
 
 

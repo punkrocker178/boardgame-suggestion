@@ -23,7 +23,14 @@ from sqlalchemy.orm import Session
 from app.bgg.parser import parse_thing_response
 from app.config import get_settings
 from app.db.engine import get_session_factory, init_db
-from app.db.models import CrawlStatus, Game, GameCategory, GameMechanic
+from app.db.models import (
+    Category,
+    CrawlStatus,
+    Game,
+    GameCategory,
+    GameMechanic,
+    Mechanic,
+)
 from app.logging_config import configure_logging
 
 logger = logging.getLogger(__name__)
@@ -126,13 +133,32 @@ def _apply_thing_data(session: Session, game: Game, thing_data) -> None:
     game.thumbnail_url = thing_data.thumbnail_url
     game.image_url = thing_data.image_url
 
+    for category_id, category_name in thing_data.categories:
+        category = session.get(Category, category_id)
+        if category is None:
+            session.add(Category(id=category_id, name=category_name))
+        elif category.name != category_name:
+            category.name = category_name
+
+    for mechanic_id, mechanic_name in thing_data.mechanics:
+        mechanic = session.get(Mechanic, mechanic_id)
+        if mechanic is None:
+            session.add(Mechanic(id=mechanic_id, name=mechanic_name))
+        elif mechanic.name != mechanic_name:
+            mechanic.name = mechanic_name
+
+    session.flush()
+
     game.categories.clear()
-    for category in thing_data.categories:
-        game.categories.append(GameCategory(category=category))
+    for category_id, _category_name in thing_data.categories:
+        game.categories.append(GameCategory(category_id=category_id))
 
     game.mechanics.clear()
-    for mechanic in thing_data.mechanics:
-        game.mechanics.append(GameMechanic(mechanic=mechanic))
+    for mechanic_id, _mechanic_name in thing_data.mechanics:
+        game.mechanics.append(GameMechanic(mechanic_id=mechanic_id))
+
+    game.best_with_players = thing_data.best_with_players
+    game.recommended_with_players = thing_data.recommended_with_players
 
 
 def _process_batch(

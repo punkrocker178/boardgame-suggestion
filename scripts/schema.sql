@@ -26,6 +26,8 @@ CREATE TABLE IF NOT EXISTS games (
     weight NUMERIC(4, 2),
     thumbnail_url TEXT,
     image_url TEXT,
+    best_with_players INTEGER[],
+    recommended_with_players INTEGER[],
     crawl_status VARCHAR(20) NOT NULL DEFAULT 'pending',
     crawled_at TIMESTAMPTZ,
     crawl_attempts INTEGER NOT NULL DEFAULT 0,
@@ -34,16 +36,26 @@ CREATE TABLE IF NOT EXISTS games (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS categories (
+    id INTEGER PRIMARY KEY,
+    name VARCHAR(255) NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS mechanics (
+    id INTEGER PRIMARY KEY,
+    name VARCHAR(255) NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS game_categories (
     game_id INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
-    category VARCHAR(255) NOT NULL,
-    PRIMARY KEY (game_id, category)
+    category_id INTEGER NOT NULL REFERENCES categories(id),
+    PRIMARY KEY (game_id, category_id)
 );
 
 CREATE TABLE IF NOT EXISTS game_mechanics (
     game_id INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
-    mechanic VARCHAR(255) NOT NULL,
-    PRIMARY KEY (game_id, mechanic)
+    mechanic_id INTEGER NOT NULL REFERENCES mechanics(id),
+    PRIMARY KEY (game_id, mechanic_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_games_crawl_status ON games(crawl_status);
