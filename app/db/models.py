@@ -7,16 +7,31 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    JSON,
     Numeric,
     String,
     Text,
+    TypeDecorator,
     func,
 )
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
 class Base(DeclarativeBase):
     pass
+
+
+class IntArray(TypeDecorator):
+    """Postgres INTEGER[]; JSON list on SQLite for unit tests."""
+
+    impl = JSON
+    cache_ok = True
+
+    def load_dialect_impl(self, dialect):
+        if dialect.name == "postgresql":
+            return dialect.type_descriptor(ARRAY(Integer))
+        return dialect.type_descriptor(JSON())
 
 
 class CrawlStatus(StrEnum):
@@ -57,6 +72,8 @@ class Game(Base):
     weight: Mapped[float | None] = mapped_column(Numeric(4, 2))
     thumbnail_url: Mapped[str | None] = mapped_column(Text)
     image_url: Mapped[str | None] = mapped_column(Text)
+    best_with_players: Mapped[list[int] | None] = mapped_column(IntArray)
+    recommended_with_players: Mapped[list[int] | None] = mapped_column(IntArray)
 
     crawl_status: Mapped[str] = mapped_column(
         String(20), nullable=False, default=CrawlStatus.PENDING
@@ -88,15 +105,32 @@ class Game(Base):
     )
 
 
+class Category(Base):
+    __tablename__ = "categories"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+
+
+class Mechanic(Base):
+    __tablename__ = "mechanics"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+
+
 class GameCategory(Base):
     __tablename__ = "game_categories"
 
     game_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("games.id", ondelete="CASCADE"), primary_key=True
     )
-    category: Mapped[str] = mapped_column(String(255), primary_key=True)
+    category_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("categories.id"), primary_key=True
+    )
 
     game: Mapped[Game] = relationship(back_populates="categories")
+    category: Mapped[Category] = relationship()
 
 
 class GameMechanic(Base):
@@ -105,6 +139,9 @@ class GameMechanic(Base):
     game_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("games.id", ondelete="CASCADE"), primary_key=True
     )
-    mechanic: Mapped[str] = mapped_column(String(255), primary_key=True)
+    mechanic_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("mechanics.id"), primary_key=True
+    )
 
     game: Mapped[Game] = relationship(back_populates="mechanics")
+    mechanic: Mapped[Mechanic] = relationship()

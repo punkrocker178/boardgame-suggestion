@@ -4,9 +4,34 @@ import httpx
 import pytest
 from sqlalchemy.orm import Session
 
-from app.db.models import CrawlStatus, Game
+from app.db.models import (
+    Category,
+    CrawlStatus,
+    Game,
+    GameCategory,
+    GameMechanic,
+    Mechanic,
+)
 from scripts.crawl_bgg_metadata import _fetch_batch, crawl
 from tests.fixtures.bgg_thing import SAMPLE_THING_XML
+
+
+def test_game_taxonomy_fk_and_arrays(db_session: Session) -> None:
+    db_session.add(Category(id=1021, name="Economic"))
+    db_session.add(Mechanic(id=2081, name="Network Building"))
+    game = Game(id=1, name="Test", is_expansion=False)
+    game.best_with_players = [4, 5]
+    game.recommended_with_players = [3, 4, 5, 6]
+    game.categories.append(GameCategory(category_id=1021))
+    game.mechanics.append(GameMechanic(mechanic_id=2081))
+    db_session.add(game)
+    db_session.commit()
+
+    db_session.refresh(game)
+    assert game.categories[0].category.name == "Economic"
+    assert game.mechanics[0].mechanic.name == "Network Building"
+    assert game.best_with_players == [4, 5]
+    assert game.recommended_with_players == [3, 4, 5, 6]
 
 
 def test_fetch_batch_retries_on_503() -> None:
