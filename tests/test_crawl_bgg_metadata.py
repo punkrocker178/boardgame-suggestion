@@ -110,4 +110,12 @@ def test_crawl_marks_games_completed(db_session: Session) -> None:
     assert game.min_players == 2
     assert game.max_players == 4
     assert game.playing_time == 120
-    assert len(game.categories) == 2
+    assert {(c.category_id, c.category.name) for c in game.categories} == {
+        (1021, "Economic"),
+        (1086, "Territory Building"),
+    }
+    assert {(m.mechanic_id, m.mechanic.name) for m in game.mechanics} == {
+        (2081, "Route/Network Building"),
+    }
+    assert game.best_with_players == [4, 5]
+    assert game.recommended_with_players == [3, 4, 5, 6]
