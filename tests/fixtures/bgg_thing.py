@@ -12,6 +12,10 @@ SAMPLE_THING_XML = """<?xml version="1.0" encoding="utf-8"?>
     <minplaytime value="60"/>
     <maxplaytime value="120"/>
     <minage value="14"/>
+    <poll-summary name="suggested_numplayers" title="User Suggested Number of Players">
+      <result name="bestwith" value="Best with 4–5 players" />
+      <result name="recommmendedwith" value="Recommended with 3–6 players" />
+    </poll-summary>
     <link type="boardgamecategory" id="1021" value="Economic"/>
     <link type="boardgamecategory" id="1086" value="Territory Building"/>
     <link type="boardgamemechanic" id="2081" value="Route/Network Building"/>

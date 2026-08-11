@@ -1,5 +1,6 @@
 from app.bgg.parser import (
     complexity_from_weight,
+    parse_player_count_summary,
     parse_thing_response,
     resolve_play_time,
     strip_html,
@@ -36,8 +37,10 @@ def test_parse_thing_response() -> None:
     assert game.max_players == 4
     assert game.playing_time == 120
     assert game.weight == 3.86
-    assert game.categories == ["Economic", "Territory Building"]
-    assert game.mechanics == ["Route/Network Building"]
+    assert game.categories == [(1021, "Economic"), (1086, "Territory Building")]
+    assert game.mechanics == [(2081, "Route/Network Building")]
+    assert game.best_with_players == [4, 5]
+    assert game.recommended_with_players == [3, 4, 5, 6]
     assert game.thumbnail_url == "https://example.com/thumb.jpg"
 
 
@@ -45,3 +48,24 @@ def test_parse_thing_response_playtime_fallback() -> None:
     parsed = parse_thing_response(EMPTY_PLAYTIME_XML)
     game = parsed[999]
     assert game.playing_time == 90
+
+
+def test_parse_player_count_summary_variants() -> None:
+    assert parse_player_count_summary("Best with 4–5 players") == [4, 5]
+    assert parse_player_count_summary("Best with 4-5 players") == [4, 5]
+    assert parse_player_count_summary("Recommended with 2–4 players") == [2, 3, 4]
+    assert parse_player_count_summary("Best with 2, 4 players") == [2, 4]
+    assert parse_player_count_summary("Best with 4 players") == [4]
+    assert parse_player_count_summary("Recommended with 7+ players") is None
+    assert parse_player_count_summary("") is None
+    assert parse_player_count_summary(None) is None
+
+
+def test_parse_skips_links_missing_id() -> None:
+    xml = """<?xml version="1.0"?>
+    <items><item type="boardgame" id="1">
+      <link type="boardgamecategory" value="Economic"/>
+      <link type="boardgamecategory" id="1021" value="Economic"/>
+    </item></items>"""
+    game = parse_thing_response(xml)[1]
+    assert game.categories == [(1021, "Economic")]
