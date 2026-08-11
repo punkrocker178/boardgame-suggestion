@@ -10,7 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.bgg.parser import complexity_from_weight
-from app.db.models import CrawlStatus, Game
+from app.db.models import CrawlStatus, Game, GameCategory
 
 REQUIRED_COLUMNS = [
     "name",
@@ -80,7 +80,7 @@ def _eligible_games_filters():
 def _eligible_games_stmt():
     return (
         select(Game)
-        .options(selectinload(Game.categories))
+        .options(selectinload(Game.categories).selectinload(GameCategory.category))
         .where(*_eligible_games_filters())
         .order_by(Game.rank.asc().nulls_last(), Game.name.asc())
     )
@@ -89,7 +89,7 @@ def _eligible_games_stmt():
 def _game_to_row(game: Game) -> dict[str, str]:
     description = game.description or game.name
     categories = ",".join(
-        category.category.lower().replace(" ", "_") for category in game.categories
+        link.category.name.lower().replace(" ", "_") for link in game.categories
     )
     complexity = complexity_from_weight(
         float(game.weight) if game.weight is not None else None

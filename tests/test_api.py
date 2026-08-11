@@ -8,7 +8,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.db.models import Base, CrawlStatus, Game, GameCategory
+from app.db.models import Base, Category, CrawlStatus, Game, GameCategory
 from app.main import app, app_state
 from app.models import ExtractedFilters, GameRecommendation
 from app.recommender import SynthesisOutput
@@ -28,6 +28,8 @@ def client(tmp_path, monkeypatch):
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
     with factory() as session:
+        session.add(Category(id=1000, name="Strategy"))
+        session.flush()
         game = Game(
             id=1,
             name="Catan",
@@ -41,7 +43,7 @@ def client(tmp_path, monkeypatch):
             weight=2.3,
             crawled_at=datetime.now(UTC),
         )
-        game.categories.append(GameCategory(category="Strategy"))
+        game.categories.append(GameCategory(category_id=1000))
         session.add(game)
         session.commit()
 
