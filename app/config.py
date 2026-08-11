@@ -31,6 +31,8 @@ class Settings(BaseSettings):
     ollama_embedding_model: str = "nomic-embed-text"
 
     chroma_persist_dir: str = "./data/chroma"
+    embedding_batch_size: int = 200
+    embedding_max_retries: int = 5
     log_level: str = "INFO"
 
     database_url: str = "postgresql+psycopg://localhost/boardgame_suggestion"

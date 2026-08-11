@@ -46,10 +46,19 @@ def _format_candidates(documents: list[Document]) -> str:
         if isinstance(categories, str):
             categories = [c.strip() for c in categories.split(",") if c.strip()]
         complexity = meta.get("complexity", "unknown")
+        weight = meta.get("weight")
+        weight_part = f", weight {weight}" if weight is not None else ""
+        extras: list[str] = []
+        if meta.get("min_age") is not None:
+            extras.append(f"min_age {meta['min_age']}")
+        if meta.get("year_published") is not None:
+            extras.append(f"year {meta['year_published']}")
+        extra_part = f", {', '.join(extras)}" if extras else ""
         lines.append(
             f"- {meta['name']}: {doc.page_content} "
             f"Players {meta['min_players']}-{meta['max_players']}, "
-            f"{meta['play_time_minutes']} min, complexity {complexity}, "
+            f"{meta['play_time_minutes']} min, complexity {complexity}"
+            f"{weight_part}{extra_part}, "
             f"categories {', '.join(categories)}"
         )
     return "\n".join(lines)
@@ -93,5 +102,13 @@ def filters_to_applied(filters: ExtractedFilters) -> FiltersApplied:
         categories=filters.categories,
         max_play_time_minutes=filters.max_play_time_minutes,
         complexity=filters.complexity,
+        min_weight=filters.min_weight,
+        max_weight=filters.max_weight,
+        min_age=filters.min_age,
+        max_age=filters.max_age,
+        min_year=filters.min_year,
+        max_year=filters.max_year,
+        best_with_player_count=filters.best_with_player_count,
+        recommended_with_player_count=filters.recommended_with_player_count,
         keywords=filters.keywords,
     )

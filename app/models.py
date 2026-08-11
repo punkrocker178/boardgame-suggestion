@@ -22,6 +22,14 @@ class FiltersApplied(BaseModel):
     categories: list[str] | None = None
     max_play_time_minutes: int | None = None
     complexity: Literal["light", "medium", "heavy"] | None = None
+    min_weight: float | None = None
+    max_weight: float | None = None
+    min_age: int | None = None
+    max_age: int | None = None
+    min_year: int | None = None
+    max_year: int | None = None
+    best_with_player_count: int | None = None
+    recommended_with_player_count: int | None = None
     keywords: list[str] | None = None
 
 
@@ -37,6 +45,14 @@ class ExtractedFilters(BaseModel):
     categories: list[str] | None = None
     max_play_time_minutes: int | None = None
     complexity: Literal["light", "medium", "heavy"] | None = None
+    min_weight: float | None = None
+    max_weight: float | None = None
+    min_age: int | None = None
+    max_age: int | None = None
+    min_year: int | None = None
+    max_year: int | None = None
+    best_with_player_count: int | None = None
+    recommended_with_player_count: int | None = None
     keywords: list[str] | None = None
 
     @model_validator(mode="before")

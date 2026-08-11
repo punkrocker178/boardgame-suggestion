@@ -8,6 +8,39 @@ from app.models import ExtractedFilters
 logger = logging.getLogger(__name__)
 
 
+def _weight_conditions(filters: ExtractedFilters) -> list[dict]:
+    conditions: list[dict] = []
+    if filters.min_weight is not None:
+        conditions.append({"weight": {"$gte": filters.min_weight}})
+    if filters.max_weight is not None:
+        conditions.append({"weight": {"$lte": filters.max_weight}})
+    return conditions
+
+
+def _difficulty_condition(filters: ExtractedFilters) -> dict | None:
+    weight_conds = _weight_conditions(filters)
+    has_complexity = filters.complexity is not None
+    if has_complexity and weight_conds:
+        weight_clause: dict
+        if len(weight_conds) == 1:
+            weight_clause = weight_conds[0]
+        else:
+            weight_clause = {"$and": weight_conds}
+        return {
+            "$or": [
+                {"complexity": filters.complexity},
+                weight_clause,
+            ]
+        }
+    if has_complexity:
+        return {"complexity": filters.complexity}
+    if not weight_conds:
+        return None
+    if len(weight_conds) == 1:
+        return weight_conds[0]
+    return {"$and": weight_conds}
+
+
 def build_where_clause(filters: ExtractedFilters) -> dict | None:
     conditions: list[dict] = []
 
@@ -21,9 +54,6 @@ def build_where_clause(filters: ExtractedFilters) -> dict | None:
             {"play_time_minutes": {"$lte": filters.max_play_time_minutes}}
         )
 
-    if filters.complexity is not None:
-        conditions.append({"complexity": filters.complexity})
-
     if filters.categories:
         category_conditions = [
             {"categories": {"$contains": category}} for category in filters.categories
@@ -32,6 +62,28 @@ def build_where_clause(filters: ExtractedFilters) -> dict | None:
             conditions.append(category_conditions[0])
         else:
             conditions.append({"$or": category_conditions})
+
+    difficulty = _difficulty_condition(filters)
+    if difficulty is not None:
+        conditions.append(difficulty)
+
+    if filters.min_age is not None:
+        conditions.append({"min_age": {"$gte": filters.min_age}})
+    if filters.max_age is not None:
+        conditions.append({"min_age": {"$lte": filters.max_age}})
+
+    if filters.min_year is not None:
+        conditions.append({"year_published": {"$gte": filters.min_year}})
+    if filters.max_year is not None:
+        conditions.append({"year_published": {"$lte": filters.max_year}})
+
+    if filters.best_with_player_count is not None:
+        token = f"#{filters.best_with_player_count}#"
+        conditions.append({"best_with_players": {"$contains": token}})
+
+    if filters.recommended_with_player_count is not None:
+        token = f"#{filters.recommended_with_player_count}#"
+        conditions.append({"recommended_with_players": {"$contains": token}})
 
     if not conditions:
         return None

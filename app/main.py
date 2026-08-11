@@ -9,7 +9,7 @@ from openai import APIConnectionError, APIStatusError
 
 from app.config import Settings, get_embeddings, get_llm, get_settings
 from app.db.engine import get_session_factory
-from app.ingest import IngestError, get_vector_store, ingest_games
+from app.ingest import IngestError, count_indexed_games, get_vector_store, ingest_games
 from app.logging_config import configure_logging
 from app.models import HealthResponse, RecommendRequest, RecommendResponse
 from app.query_extractor import extract_filters
@@ -24,6 +24,7 @@ class AppState:
         self.settings: Settings = get_settings()
         self.indexed_games: int = 0
         self.indexing_ok: bool = False
+        self.index_stale: bool = False
         self.llm: BaseChatModel | None = None
 
 
@@ -35,12 +36,24 @@ def _run_indexing(settings: Settings) -> None:
     embeddings = get_embeddings(settings)
     session_factory = get_session_factory()
     with session_factory() as session:
-        result = ingest_games(session, chroma_dir, embeddings)
+        result = ingest_games(
+            session,
+            chroma_dir,
+            embeddings,
+            batch_size=settings.embedding_batch_size,
+            max_retries=settings.embedding_max_retries,
+        )
     app_state.indexed_games = result.indexed_count
-    app_state.indexing_ok = True
+    app_state.indexing_ok = result.indexed_count > 0
+    app_state.index_stale = result.stale
     if result.skipped:
         logger.info(
             "Skipped re-index; DB watermark unchanged (%d games)",
+            result.indexed_count,
+        )
+    elif result.stale:
+        logger.warning(
+            "Serving stale Chroma index (%d games) after failed refresh",
             result.indexed_count,
         )
     else:
@@ -57,10 +70,37 @@ async def lifespan(_: FastAPI):
         _run_indexing(app_state.settings)
     except IngestError:
         logger.exception("Failed to index games from database")
-        app_state.indexing_ok = False
-        app_state.indexed_games = 0
-        raise
+        _fallback_to_live_or_down()
+        if not app_state.indexing_ok:
+            raise
+    except (APIConnectionError, APIStatusError, OSError, RuntimeError):
+        logger.exception("Indexing failed due to provider or runtime error")
+        _fallback_to_live_or_down()
+        if not app_state.indexing_ok:
+            raise
     yield
+
+
+def _fallback_to_live_or_down() -> None:
+    settings = app_state.settings
+    chroma_dir = Path(settings.chroma_persist_dir)
+    try:
+        embeddings = get_embeddings(settings)
+        live_count = count_indexed_games(chroma_dir, embeddings)
+    except Exception:
+        logger.exception("Could not inspect live Chroma after indexing failure")
+        live_count = 0
+    if live_count > 0:
+        app_state.indexed_games = live_count
+        app_state.indexing_ok = True
+        app_state.index_stale = True
+        logger.warning(
+            "Starting with stale live Chroma index (%d games)", live_count
+        )
+        return
+    app_state.indexing_ok = False
+    app_state.indexed_games = 0
+    app_state.index_stale = False
 
 
 app = FastAPI(title="Board Game RAG Game Master", lifespan=lifespan)
@@ -69,7 +109,8 @@ app = FastAPI(title="Board Game RAG Game Master", lifespan=lifespan)
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     if app_state.indexing_ok and app_state.indexed_games > 0:
-        return HealthResponse(status="ok", indexed_games=app_state.indexed_games)
+        status = "degraded" if app_state.index_stale else "ok"
+        return HealthResponse(status=status, indexed_games=app_state.indexed_games)
     return HealthResponse(status="degraded", indexed_games=app_state.indexed_games)
 
 

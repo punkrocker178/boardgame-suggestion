@@ -5,8 +5,8 @@
       "name": "boardgame-chroma",
       "driver": "sqlite",
       "connectionType": "socket",
-      "socket": "simple-langchain-app/data/chroma/chroma.sqlite3",
-      "readOnly": true,
+      "socket": "data/chroma/chroma.sqlite3",
+      "readOnly": false,
       "postConnectionSqlType": "inline",
       "driverOptions": {
         "extensions": []

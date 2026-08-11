@@ -1,4 +1,6 @@
 import logging
+import shutil
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -6,6 +8,7 @@ from pathlib import Path
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
+from openai import APIConnectionError, APIStatusError, RateLimitError
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
@@ -23,6 +26,9 @@ REQUIRED_COLUMNS = [
 ALLOWED_COMPLEXITY = {"light", "medium", "heavy"}
 COLLECTION_NAME = "board_games"
 WATERMARK_FILENAME = ".games_db_watermark"
+DEFAULT_EMBED_BATCH_SIZE = 200
+DEFAULT_EMBED_MAX_RETRIES = 5
+DEFAULT_EMBED_RETRY_CAP_SECONDS = 60
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +41,13 @@ class IngestError(Exception):
 class IngestResult:
     indexed_count: int
     skipped: bool
+    stale: bool = False
+
+
+def encode_player_list(players: list[int] | None) -> str | None:
+    if not players:
+        return None
+    return "#" + "#".join(str(int(p)) for p in players) + "#"
 
 
 def _document_text(row: dict[str, str]) -> str:
@@ -74,6 +87,7 @@ def _eligible_games_filters():
         Game.min_players.is_not(None),
         Game.max_players.is_not(None),
         Game.playing_time.is_not(None),
+        Game.rank > 0,
     )
 
 
@@ -95,6 +109,7 @@ def _game_to_row(game: Game) -> dict[str, str]:
         float(game.weight) if game.weight is not None else None
     )
     row = {
+        "id": str(game.id),
         "name": game.name,
         "description": description,
         "min_players": str(game.min_players),
@@ -104,6 +119,18 @@ def _game_to_row(game: Game) -> dict[str, str]:
     }
     if complexity:
         row["complexity"] = complexity
+    if game.weight is not None:
+        row["weight"] = str(float(game.weight))
+    if game.min_age is not None:
+        row["min_age"] = str(game.min_age)
+    if game.year_published is not None:
+        row["year_published"] = str(game.year_published)
+    best_with = encode_player_list(game.best_with_players)
+    if best_with:
+        row["best_with_players"] = best_with
+    recommended_with = encode_player_list(game.recommended_with_players)
+    if recommended_with:
+        row["recommended_with_players"] = recommended_with
     return row
 
 
@@ -114,11 +141,32 @@ def load_games_for_rag(session: Session) -> list[dict[str, str]]:
             "No eligible games in database; run import + crawl before starting the API"
         )
     rows: list[dict[str, str]] = []
+    skipped = 0
     for index, game in enumerate(games, start=1):
         row = _game_to_row(game)
-        validate_row(row, index)
+        try:
+            validate_row(row, index)
+        except IngestError as exc:
+            skipped += 1
+            logger.warning(
+                "Skipping game id=%s name=%r: %s",
+                game.id,
+                game.name,
+                exc,
+            )
+            continue
         rows.append(row)
-    logger.debug("Loaded %d eligible games from database", len(rows))
+    if not rows:
+        raise IngestError(
+            "No valid games to index after skipping invalid rows; "
+            "check player counts and play times in crawled data"
+        )
+    if skipped:
+        logger.warning(
+            "Skipped %d invalid games; indexing %d valid games", skipped, len(rows)
+        )
+    else:
+        logger.debug("Loaded %d eligible games from database", len(rows))
     return rows
 
 
@@ -144,9 +192,21 @@ def rows_to_documents(rows: list[dict[str, str]]) -> list[Document]:
             "play_time_minutes": int(row["play_time_minutes"]),
             "categories": ",".join(categories),
         }
+        if row.get("id"):
+            metadata["game_id"] = int(row["id"])
         complexity = row.get("complexity", "").strip()
         if complexity:
             metadata["complexity"] = complexity
+        if row.get("weight"):
+            metadata["weight"] = float(row["weight"])
+        if row.get("min_age"):
+            metadata["min_age"] = int(row["min_age"])
+        if row.get("year_published"):
+            metadata["year_published"] = int(row["year_published"])
+        if row.get("best_with_players"):
+            metadata["best_with_players"] = row["best_with_players"]
+        if row.get("recommended_with_players"):
+            metadata["recommended_with_players"] = row["recommended_with_players"]
 
         documents.append(
             Document(page_content=_document_text(row), metadata=metadata)
@@ -158,12 +218,147 @@ def _watermark_path(chroma_dir: Path) -> Path:
     return chroma_dir / WATERMARK_FILENAME
 
 
+def _staging_dir(chroma_dir: Path) -> Path:
+    return chroma_dir.with_name(chroma_dir.name + "_staging")
+
+
+def _old_dir(chroma_dir: Path) -> Path:
+    return chroma_dir.with_name(chroma_dir.name + "_old")
+
+
+def _chunks(items: list, size: int):
+    for i in range(0, len(items), size):
+        yield items[i : i + size]
+
+
+def _is_retryable_embed_error(exc: BaseException) -> bool:
+    if isinstance(exc, (APIConnectionError, RateLimitError, TimeoutError)):
+        return True
+    if isinstance(exc, APIStatusError):
+        status = getattr(exc, "status_code", None)
+        if status == 429:
+            return True
+        if isinstance(status, int) and status >= 500:
+            return True
+    return False
+
+
+def embed_documents_with_retry(
+    embeddings: Embeddings,
+    texts: list[str],
+    *,
+    max_retries: int = DEFAULT_EMBED_MAX_RETRIES,
+    retry_cap_seconds: float = DEFAULT_EMBED_RETRY_CAP_SECONDS,
+) -> list[list[float]]:
+    attempt = 0
+    while True:
+        try:
+            return embeddings.embed_documents(texts)
+        except Exception as exc:
+            if not _is_retryable_embed_error(exc) or attempt >= max_retries:
+                raise
+            delay = min(2**attempt, retry_cap_seconds)
+            logger.warning(
+                "Embedding batch failed (attempt %d/%d): %s; retrying in %.1fs",
+                attempt + 1,
+                max_retries,
+                exc,
+                delay,
+            )
+            time.sleep(delay)
+            attempt += 1
+
+
+def _clear_chroma_client_cache() -> None:
+    """Drop cached PersistentClients so dirs can be renamed/removed safely."""
+    try:
+        from chromadb.api.client import SharedSystemClient
+
+        SharedSystemClient.clear_system_cache()
+    except Exception:
+        logger.debug("Could not clear Chroma system cache", exc_info=True)
+
+
+def count_indexed_games(chroma_dir: Path, embeddings: Embeddings) -> int:
+    if not chroma_dir.exists():
+        return 0
+    try:
+        store = get_vector_store(chroma_dir, embeddings)
+        return int(store._collection.count())
+    except Exception:
+        logger.exception("Failed to count documents in live Chroma at %s", chroma_dir)
+        return 0
+    finally:
+        _clear_chroma_client_cache()
+
+
+def _swap_staging_to_live(staging: Path, live: Path) -> None:
+    _clear_chroma_client_cache()
+    old = _old_dir(live)
+    if old.exists():
+        shutil.rmtree(old)
+    if live.exists():
+        live.rename(old)
+    try:
+        staging.rename(live)
+    except Exception:
+        if not live.exists() and old.exists():
+            old.rename(live)
+        raise
+    if old.exists():
+        shutil.rmtree(old)
+    _clear_chroma_client_cache()
+
+
+def _index_documents_to_dir(
+    documents: list[Document],
+    target_dir: Path,
+    embeddings: Embeddings,
+    *,
+    batch_size: int,
+    max_retries: int,
+) -> None:
+    _clear_chroma_client_cache()
+    if target_dir.exists():
+        shutil.rmtree(target_dir)
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    store = Chroma(
+        collection_name=COLLECTION_NAME,
+        persist_directory=str(target_dir),
+        embedding_function=embeddings,
+    )
+    try:
+        for batch in _chunks(documents, batch_size):
+            texts = [doc.page_content for doc in batch]
+            metadatas = [doc.metadata for doc in batch]
+            ids = [
+                str(doc.metadata["game_id"])
+                if "game_id" in doc.metadata
+                else doc.metadata["name"]
+                for doc in batch
+            ]
+            vectors = embed_documents_with_retry(
+                embeddings, texts, max_retries=max_retries
+            )
+            store._collection.upsert(
+                ids=ids,
+                documents=texts,
+                metadatas=metadatas,
+                embeddings=vectors,
+            )
+    finally:
+        _clear_chroma_client_cache()
+
+
 def ingest_games(
     session: Session,
     chroma_dir: Path,
     embeddings: Embeddings,
     *,
     force: bool = False,
+    batch_size: int = DEFAULT_EMBED_BATCH_SIZE,
+    max_retries: int = DEFAULT_EMBED_MAX_RETRIES,
 ) -> IngestResult:
     chroma_dir.mkdir(parents=True, exist_ok=True)
     current_watermark = compute_games_watermark(session)
@@ -178,26 +373,42 @@ def ingest_games(
         logger.info(
             "Skipping re-index; DB watermark unchanged (%d games)", len(rows)
         )
-        return IngestResult(indexed_count=len(rows), skipped=True)
+        return IngestResult(indexed_count=len(rows), skipped=True, stale=False)
 
-    logger.info("Indexing games from database into %s", chroma_dir)
+    logger.info("Indexing games from database into staging for %s", chroma_dir)
     rows = load_games_for_rag(session)
     documents = rows_to_documents(rows)
+    staging = _staging_dir(chroma_dir)
 
-    Chroma.from_documents(
-        documents=documents,
-        embedding=embeddings,
-        collection_name=COLLECTION_NAME,
-        persist_directory=str(chroma_dir),
-    )
+    try:
+        _index_documents_to_dir(
+            documents,
+            staging,
+            embeddings,
+            batch_size=batch_size,
+            max_retries=max_retries,
+        )
+        _swap_staging_to_live(staging, chroma_dir)
+        watermark_file.write_text(current_watermark)
+    except Exception:
+        if staging.exists():
+            shutil.rmtree(staging, ignore_errors=True)
+        live_count = count_indexed_games(chroma_dir, embeddings)
+        if live_count > 0:
+            logger.exception(
+                "Re-index failed; keeping live Chroma with %d documents", live_count
+            )
+            return IngestResult(
+                indexed_count=live_count, skipped=False, stale=True
+            )
+        raise
 
-    watermark_file.write_text(current_watermark)
     logger.info(
         "Indexed %d games into Chroma collection %s",
         len(documents),
         COLLECTION_NAME,
     )
-    return IngestResult(indexed_count=len(documents), skipped=False)
+    return IngestResult(indexed_count=len(documents), skipped=False, stale=False)
 
 
 def get_vector_store(chroma_dir: Path, embeddings: Embeddings) -> Chroma:

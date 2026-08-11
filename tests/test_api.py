@@ -134,3 +134,44 @@ def test_recommend_no_games_indexed_returns_503(
 
     app_state.indexing_ok = True
     app_state.indexed_games = 1
+    app_state.index_stale = False
+
+
+def test_health_degraded_when_index_stale(client: TestClient) -> None:
+    app_state.indexing_ok = True
+    app_state.indexed_games = 1
+    app_state.index_stale = True
+    response = client.get("/health")
+    assert response.status_code == 200
+    assert response.json()["status"] == "degraded"
+    assert response.json()["indexed_games"] == 1
+    app_state.index_stale = False
+
+
+def test_run_indexing_marks_stale(tmp_path, monkeypatch) -> None:
+    from contextlib import contextmanager
+
+    from app.ingest import IngestResult
+    from app.main import _run_indexing
+
+    monkeypatch.setenv("CHROMA_PERSIST_DIR", str(tmp_path / "chroma"))
+    app_state.settings = app_state.settings.__class__()
+    app_state.indexed_games = 0
+    app_state.indexing_ok = False
+    app_state.index_stale = False
+
+    @contextmanager
+    def fake_session_factory():
+        yield object()
+
+    with patch(
+        "app.main.ingest_games",
+        return_value=IngestResult(indexed_count=3, skipped=False, stale=True),
+    ), patch("app.main.get_embeddings", return_value=FakeEmbeddings(size=8)), patch(
+        "app.main.get_session_factory", return_value=fake_session_factory
+    ):
+        _run_indexing(app_state.settings)
+
+    assert app_state.indexing_ok is True
+    assert app_state.index_stale is True
+    assert app_state.indexed_games == 3
