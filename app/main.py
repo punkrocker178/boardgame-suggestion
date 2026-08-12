@@ -133,9 +133,11 @@ def recommend(request: RecommendRequest) -> RecommendResponse:
 
     chroma_dir = Path(settings.chroma_persist_dir)
     vector_store = get_vector_store(chroma_dir, get_embeddings(settings))
-    candidates, filters_relaxed = retrieve_games(
-        vector_store, filters, request.query, top_k=5
-    )
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        candidates, filters_relaxed = retrieve_games(
+            session, vector_store, filters, request.query, top_k=5
+        )
 
     try:
         synthesis = synthesize_recommendations(llm, request.query, filters, candidates)

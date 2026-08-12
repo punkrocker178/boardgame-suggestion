@@ -31,6 +31,8 @@ EXTRACTION_PROMPT = ChatPromptTemplate.from_messages(
             "- 'best with 4' → best_with_player_count=4 (do not set from plain player_count).\n"
             "- 'recommended for 3' / clear BGG poll language → recommended_with_player_count; "
             "otherwise use player_count only.\n\n"
+            "Categories: prefer BoardGameGeek-style names (e.g. Strategy, Party, "
+            "Card Game). Unknown labels may be treated as keywords later.\n\n"
             "Return JSON with exactly these fields:\n"
             "- player_count (int or null)\n"
             "- categories (list of strings or null)\n"

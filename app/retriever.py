@@ -2,97 +2,20 @@ import logging
 
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
+from sqlalchemy.orm import Session
 
+from app.category_normalize import apply_category_normalization
 from app.models import ExtractedFilters
+from app.sql_filters import (
+    CANDIDATE_ID_LIMIT,
+    fetch_candidate_ids,
+    has_active_hard_filters,
+    next_relaxation,
+)
 
 logger = logging.getLogger(__name__)
 
-
-def _weight_conditions(filters: ExtractedFilters) -> list[dict]:
-    conditions: list[dict] = []
-    if filters.min_weight is not None:
-        conditions.append({"weight": {"$gte": filters.min_weight}})
-    if filters.max_weight is not None:
-        conditions.append({"weight": {"$lte": filters.max_weight}})
-    return conditions
-
-
-def _difficulty_condition(filters: ExtractedFilters) -> dict | None:
-    weight_conds = _weight_conditions(filters)
-    has_complexity = filters.complexity is not None
-    if has_complexity and weight_conds:
-        weight_clause: dict
-        if len(weight_conds) == 1:
-            weight_clause = weight_conds[0]
-        else:
-            weight_clause = {"$and": weight_conds}
-        return {
-            "$or": [
-                {"complexity": filters.complexity},
-                weight_clause,
-            ]
-        }
-    if has_complexity:
-        return {"complexity": filters.complexity}
-    if not weight_conds:
-        return None
-    if len(weight_conds) == 1:
-        return weight_conds[0]
-    return {"$and": weight_conds}
-
-
-def build_where_clause(filters: ExtractedFilters) -> dict | None:
-    conditions: list[dict] = []
-
-    if filters.player_count is not None:
-        count = filters.player_count
-        conditions.append({"min_players": {"$lte": count}})
-        conditions.append({"max_players": {"$gte": count}})
-
-    if filters.max_play_time_minutes is not None:
-        conditions.append(
-            {"play_time_minutes": {"$lte": filters.max_play_time_minutes}}
-        )
-
-    if filters.categories:
-        category_conditions = [
-            {"categories": {"$contains": category}} for category in filters.categories
-        ]
-        if len(category_conditions) == 1:
-            conditions.append(category_conditions[0])
-        else:
-            conditions.append({"$or": category_conditions})
-
-    difficulty = _difficulty_condition(filters)
-    if difficulty is not None:
-        conditions.append(difficulty)
-
-    if filters.min_age is not None:
-        conditions.append({"min_age": {"$gte": filters.min_age}})
-    if filters.max_age is not None:
-        conditions.append({"min_age": {"$lte": filters.max_age}})
-
-    if filters.min_year is not None:
-        conditions.append({"year_published": {"$gte": filters.min_year}})
-    if filters.max_year is not None:
-        conditions.append({"year_published": {"$lte": filters.max_year}})
-
-    if filters.best_with_player_count is not None:
-        token = f"#{filters.best_with_player_count}#"
-        conditions.append({"best_with_players": {"$contains": token}})
-
-    if filters.recommended_with_player_count is not None:
-        token = f"#{filters.recommended_with_player_count}#"
-        conditions.append({"recommended_with_players": {"$contains": token}})
-
-    if not conditions:
-        return None
-    if len(conditions) == 1:
-        clause = conditions[0]
-    else:
-        clause = {"$and": conditions}
-    logger.debug("Built Chroma where clause: %s", clause)
-    return clause
+CHROMA_IN_LIMIT = CANDIDATE_ID_LIMIT
 
 
 def _search_query(filters: ExtractedFilters, user_query: str) -> str:
@@ -102,32 +25,109 @@ def _search_query(filters: ExtractedFilters, user_query: str) -> str:
     return " ".join(parts)
 
 
+def _post_filter_by_ids(
+    documents: list[Document], id_set: set[int], top_k: int
+) -> list[Document]:
+    matched: list[Document] = []
+    for doc in documents:
+        raw = doc.metadata.get("game_id")
+        if raw is None:
+            continue
+        try:
+            game_id = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if game_id in id_set:
+            matched.append(doc)
+        if len(matched) >= top_k:
+            break
+    return matched
+
+
+def _similarity_within_ids(
+    vector_store: Chroma,
+    query: str,
+    ids: list[int],
+    *,
+    top_k: int,
+) -> list[Document]:
+    if not ids:
+        return []
+
+    if len(ids) <= CHROMA_IN_LIMIT:
+        results = vector_store.similarity_search(
+            query, k=top_k, filter={"game_id": {"$in": ids}}
+        )
+        if results:
+            return results
+        logger.debug("Chroma $in returned 0; retrying with post-filter")
+
+    over_fetch = min(200, max(top_k * 20, 50))
+    raw = vector_store.similarity_search(query, k=over_fetch)
+    return _post_filter_by_ids(raw, set(ids), top_k)
+
+
 def retrieve_games(
+    session: Session,
     vector_store: Chroma,
     filters: ExtractedFilters,
     user_query: str,
     *,
     top_k: int = 5,
 ) -> tuple[list[Document], bool]:
-    query = _search_query(filters, user_query)
-    where = build_where_clause(filters)
-    logger.info("Retrieving games query=%r top_k=%d filters=%s", query, top_k, filters.model_dump())
+    working = apply_category_normalization(session, filters)
+    query = _search_query(working, user_query)
+    logger.info(
+        "Retrieving games query=%r top_k=%d filters=%s",
+        query,
+        top_k,
+        working.model_dump(),
+    )
 
-    if where is not None:
-        results = vector_store.similarity_search(query, k=top_k, filter=where)
-        if results:
-            logger.info(
-                "Retrieved %d games with metadata filters: %s",
-                len(results),
-                [doc.metadata.get("name") for doc in results],
+    filters_relaxed = False
+    current = working
+    stage = 0
+
+    while True:
+        ids = fetch_candidate_ids(session, current)
+        logger.info(
+            "SQL candidates=%d next_stage=%d filters=%s",
+            len(ids),
+            stage,
+            current.model_dump(),
+        )
+
+        if ids:
+            results = _similarity_within_ids(
+                vector_store, query, ids, top_k=top_k
             )
-            return results, False
-        logger.info("Metadata filters matched 0 games; falling back to semantic search")
+            if results:
+                logger.info(
+                    "Retrieved %d games (filters_relaxed=%s): %s",
+                    len(results),
+                    filters_relaxed,
+                    [doc.metadata.get("name") for doc in results],
+                )
+                return results, filters_relaxed
+            logger.info(
+                "Allowlist had %d ids but Chroma returned 0; relaxing further",
+                len(ids),
+            )
+
+        nxt = next_relaxation(current, stage)
+        if nxt is None:
+            break
+
+        if nxt.model_dump() != current.model_dump():
+            filters_relaxed = True
+        current = nxt
+        stage += 1
 
     results = vector_store.similarity_search(query, k=top_k)
-    filters_relaxed = where is not None and len(results) > 0
+    had_constraints = has_active_hard_filters(working)
+    filters_relaxed = filters_relaxed or (had_constraints and len(results) > 0)
     logger.info(
-        "Retrieved %d games (filters_relaxed=%s): %s",
+        "Retrieved %d games via unfiltered semantic (filters_relaxed=%s): %s",
         len(results),
         filters_relaxed,
         [doc.metadata.get("name") for doc in results],
