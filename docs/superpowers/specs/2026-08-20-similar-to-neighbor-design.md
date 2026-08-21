@@ -16,8 +16,8 @@ Support queries like “games like Catan” by ranking Chroma neighbors of the s
 | Seed lookup miss | Embed the user query as today; do not drop a game |
 | Resolved seed | Drop that `game_id` from hits |
 | Other filters | SQL allowlist unchanged, then neighbor rank inside those ids |
-| `similar_to` extraction (this pass) | LLM only (`ExtractedFilters.similar_to`) |
-| Text extractor phrases | Out of scope; follow-up when text extraction is implemented |
+| `similar_to` extraction (this pass) | LLM prompt on `ExtractedFilters.similar_to` |
+| Text extractor phrases | `docs/superpowers/specs/2026-08-20-text-filter-extraction-design.md` |
 | Name lookup | Eligible/indexed games only; Postgres `pg_trgm` ≥ 0.3 top 1; SQLite `ILIKE '%q%'` |
 | Catalog `/search` | Out of scope; must reuse the name-match helper later |
 | Chroma metadata | Unchanged; mechanics are embed text only |
@@ -80,7 +80,7 @@ LLM prompt additions:
 - Do not put that name in `keywords` when `similar_to` is set.
 - Other fields unchanged (players, time, categories, etc. still extract when present).
 
-Text-first extraction is not implemented yet. Do not add phrase rules in this pass.
+Text-first phrase rules live in `docs/superpowers/specs/2026-08-20-text-filter-extraction-design.md` (`similar_to` triggers, name capture, skip LLM when `similar_to` is set on short queries).
 
 ## Name lookup
 
@@ -136,7 +136,6 @@ Relaxation stages ignore `similar_to` (nothing to drop). The seed query string s
 
 ## Out of scope
 
-- Text-extractor `similar_to` phrases (do this when implementing `docs/superpowers/specs/2026-08-20-text-filter-extraction-design.md`).
 - Catalog `POST /search` / autocomplete (reuse `name_match` when that spec is built).
 - Query-by-stored-embedding.
 - Copying seed mechanics/categories into SQL filters.
