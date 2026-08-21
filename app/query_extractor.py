@@ -33,6 +33,11 @@ EXTRACTION_PROMPT = ChatPromptTemplate.from_messages(
             "otherwise use player_count only.\n\n"
             "Categories: prefer BoardGameGeek-style names (e.g. Strategy, Party, "
             "Card Game). Unknown labels may be treated as keywords later.\n\n"
+            "Similar-to:\n"
+            "- 'games like Catan', 'similar to Ticket to Ride', 'alternatives to Wingspan' "
+            "→ similar_to = the game name only.\n"
+            "- Only set similar_to when a name is explicit. Do not guess.\n"
+            "- Do not put that name in keywords when similar_to is set.\n\n"
             "Return JSON with exactly these fields:\n"
             "- player_count (int or null)\n"
             "- categories (list of strings or null)\n"
@@ -46,7 +51,8 @@ EXTRACTION_PROMPT = ChatPromptTemplate.from_messages(
             "- max_year (int or null)\n"
             "- best_with_player_count (int or null)\n"
             "- recommended_with_player_count (int or null)\n"
-            "- keywords (list of strings or null)",
+            "- keywords (list of strings or null)\n"
+            "- similar_to (string game name or null)",
         ),
         ("human", "{query}"),
     ]

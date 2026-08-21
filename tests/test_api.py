@@ -120,6 +120,32 @@ def test_recommend_response_shape(
 
 @patch("app.main.synthesize_recommendations")
 @patch("app.main.extract_filters")
+def test_recommend_filters_applied_includes_similar_to(
+    mock_extract: MagicMock,
+    mock_synthesize: MagicMock,
+    client: TestClient,
+) -> None:
+    mock_extract.return_value = ExtractedFilters(similar_to="Catan")
+    mock_synthesize.return_value = SynthesisOutput(
+        recommendations=[
+            GameRecommendation(
+                name="Azul",
+                reason="Similar weight and spatial play.",
+                min_players=2,
+                max_players=4,
+                play_time_minutes=45,
+                categories=["abstract"],
+            )
+        ],
+        reasoning="Neighbors of Catan.",
+    )
+    response = client.post("/recommend", json={"query": "games like Catan"})
+    assert response.status_code == 200
+    assert response.json()["filters_applied"]["similar_to"] == "Catan"
+
+
+@patch("app.main.synthesize_recommendations")
+@patch("app.main.extract_filters")
 def test_recommend_no_games_indexed_returns_503(
     mock_extract: MagicMock,
     mock_synthesize: MagicMock,

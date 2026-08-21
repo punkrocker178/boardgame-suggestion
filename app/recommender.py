@@ -111,4 +111,5 @@ def filters_to_applied(filters: ExtractedFilters) -> FiltersApplied:
         best_with_player_count=filters.best_with_player_count,
         recommended_with_player_count=filters.recommended_with_player_count,
         keywords=filters.keywords,
+        similar_to=filters.similar_to,
     )
