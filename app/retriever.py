@@ -5,7 +5,9 @@ from langchain_core.documents import Document
 from sqlalchemy.orm import Session
 
 from app.category_normalize import apply_category_normalization
+from app.ingest import _document_text, _game_to_row
 from app.models import ExtractedFilters
+from app.name_match import lookup_indexed_game_by_name
 from app.sql_filters import (
     CANDIDATE_ID_LIMIT,
     fetch_candidate_ids,
@@ -23,6 +25,41 @@ def _search_query(filters: ExtractedFilters, user_query: str) -> str:
     if filters.keywords:
         parts.extend(filters.keywords)
     return " ".join(parts)
+
+
+def resolve_seed_query(
+    session: Session,
+    filters: ExtractedFilters,
+    user_query: str,
+) -> tuple[str, int | None]:
+    fallback = _search_query(filters, user_query)
+    if not filters.similar_to:
+        return fallback, None
+    seed = lookup_indexed_game_by_name(session, filters.similar_to)
+    if seed is None:
+        logger.info("similar_to unmatched name=%r", filters.similar_to)
+        return fallback, None
+    return _document_text(_game_to_row(seed)), seed.id
+
+
+def _without_game_id(
+    documents: list[Document], exclude_id: int | None, top_k: int
+) -> list[Document]:
+    if exclude_id is None:
+        return documents[:top_k]
+    kept: list[Document] = []
+    for doc in documents:
+        raw = doc.metadata.get("game_id")
+        try:
+            game_id = int(raw) if raw is not None else None
+        except (TypeError, ValueError):
+            game_id = None
+        if game_id == exclude_id:
+            continue
+        kept.append(doc)
+        if len(kept) >= top_k:
+            break
+    return kept
 
 
 def _post_filter_by_ids(
@@ -76,7 +113,8 @@ def retrieve_games(
     top_k: int = 5,
 ) -> tuple[list[Document], bool]:
     working = apply_category_normalization(session, filters)
-    query = _search_query(working, user_query)
+    query, exclude_id = resolve_seed_query(session, working, user_query)
+    fetch_k = top_k + 1 if exclude_id is not None else top_k
     logger.info(
         "Retrieving games query=%r top_k=%d filters=%s",
         query,
@@ -98,8 +136,12 @@ def retrieve_games(
         )
 
         if ids:
-            results = _similarity_within_ids(
-                vector_store, query, ids, top_k=top_k
+            results = _without_game_id(
+                _similarity_within_ids(
+                    vector_store, query, ids, top_k=fetch_k
+                ),
+                exclude_id,
+                top_k,
             )
             if results:
                 logger.info(
@@ -123,7 +165,11 @@ def retrieve_games(
         current = nxt
         stage += 1
 
-    results = vector_store.similarity_search(query, k=top_k)
+    results = _without_game_id(
+        vector_store.similarity_search(query, k=fetch_k),
+        exclude_id,
+        top_k,
+    )
     had_constraints = has_active_hard_filters(working)
     filters_relaxed = filters_relaxed or (had_constraints and len(results) > 0)
     logger.info(

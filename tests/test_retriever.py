@@ -7,9 +7,9 @@ from langchain_core.embeddings import FakeEmbeddings
 from sqlalchemy.orm import Session
 
 from app.db.models import Category, CrawlStatus, Game, GameCategory
-from app.ingest import COLLECTION_NAME, rows_to_documents
+from app.ingest import COLLECTION_NAME, _document_text, _game_to_row, rows_to_documents
 from app.models import ExtractedFilters
-from app.retriever import retrieve_games
+from app.retriever import resolve_seed_query, retrieve_games
 
 
 def _seed_db(session: Session) -> None:
@@ -196,4 +196,41 @@ def test_retrieve_normalizes_category_slug(
     )
     names = {doc.metadata["name"] for doc in results}
     assert names == {"Catan"}
+    assert relaxed is False
+
+
+def test_resolve_seed_query_hit_uses_document_text(
+    seeded_session: Session,
+) -> None:
+    filters = ExtractedFilters(similar_to="Catan")
+    query, exclude_id = resolve_seed_query(
+        seeded_session, filters, "games like Catan"
+    )
+    seed = seeded_session.get(Game, 1)
+    assert exclude_id == 1
+    assert query == _document_text(_game_to_row(seed))
+    assert query != "games like Catan"
+
+
+def test_resolve_seed_query_miss_uses_user_query(
+    seeded_session: Session,
+) -> None:
+    filters = ExtractedFilters(similar_to="NoSuchGame")
+    query, exclude_id = resolve_seed_query(
+        seeded_session, filters, "games like NoSuchGame"
+    )
+    assert exclude_id is None
+    assert query == "games like NoSuchGame"
+
+
+def test_retrieve_similar_to_drops_seed(
+    seeded_session: Session, vector_store: Chroma
+) -> None:
+    filters = ExtractedFilters(similar_to="Catan")
+    results, relaxed = retrieve_games(
+        seeded_session, vector_store, filters, "games like Catan", top_k=5
+    )
+    names = {doc.metadata["name"] for doc in results}
+    assert "Catan" not in names
+    assert len(results) > 0
     assert relaxed is False
