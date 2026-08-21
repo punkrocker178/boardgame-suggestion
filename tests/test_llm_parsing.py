@@ -33,3 +33,13 @@ def test_extracted_filters_normalizes_max_alias() -> None:
 def test_extracted_filters_rejects_invalid_complexity() -> None:
     with pytest.raises(Exception):
         ExtractedFilters.model_validate({"complexity": "extreme"})
+
+
+def test_extracted_filters_similar_to_round_trip() -> None:
+    filters = ExtractedFilters.model_validate({"similar_to": "Catan"})
+    assert filters.similar_to == "Catan"
+
+
+def test_extracted_filters_blank_similar_to_is_none() -> None:
+    filters = ExtractedFilters.model_validate({"similar_to": "  "})
+    assert filters.similar_to is None
