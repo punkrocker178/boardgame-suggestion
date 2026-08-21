@@ -1,4 +1,6 @@
 -- Bootstrap DDL for BGG pipeline (also created via SQLAlchemy init_db)
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
 CREATE TABLE IF NOT EXISTS games (
     id INTEGER PRIMARY KEY,
     name VARCHAR(512) NOT NULL,
@@ -60,3 +62,4 @@ CREATE TABLE IF NOT EXISTS game_mechanics (
 
 CREATE INDEX IF NOT EXISTS idx_games_crawl_status ON games(crawl_status);
 CREATE INDEX IF NOT EXISTS idx_games_rank ON games(rank) WHERE rank IS NOT NULL AND rank > 0;
+CREATE INDEX IF NOT EXISTS idx_games_name_trgm ON games USING gin (name gin_trgm_ops);

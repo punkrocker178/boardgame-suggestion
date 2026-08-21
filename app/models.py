@@ -31,6 +31,7 @@ class FiltersApplied(BaseModel):
     best_with_player_count: int | None = None
     recommended_with_player_count: int | None = None
     keywords: list[str] | None = None
+    similar_to: str | None = None
 
 
 class RecommendResponse(BaseModel):
@@ -54,6 +55,7 @@ class ExtractedFilters(BaseModel):
     best_with_player_count: int | None = None
     recommended_with_player_count: int | None = None
     keywords: list[str] | None = None
+    similar_to: str | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -87,6 +89,10 @@ class ExtractedFilters(BaseModel):
         categories = data.get("categories")
         if isinstance(categories, str):
             data["categories"] = [c.strip() for c in categories.split(",") if c.strip()]
+
+        similar_to = data.get("similar_to")
+        if isinstance(similar_to, str) and not similar_to.strip():
+            data["similar_to"] = None
 
         return data
 

@@ -183,6 +183,7 @@ def test_next_relaxation_order() -> None:
 def test_has_active_hard_filters() -> None:
     assert has_active_hard_filters(ExtractedFilters()) is False
     assert has_active_hard_filters(ExtractedFilters(player_count=4)) is True
+    assert has_active_hard_filters(ExtractedFilters(similar_to="Catan")) is False
 
 
 def test_fetch_candidate_ids_respects_limit(db_session: Session) -> None:
