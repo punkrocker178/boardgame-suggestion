@@ -47,6 +47,13 @@ If the database was created before categories/mechanics lookup tables and poll a
 2. Run `python scripts/crawl_bgg_metadata.py` — restart alone is not enough.
 3. Fresh installs: use updated `scripts/schema.sql` + import dump + crawl; skip the migrate script.
 
+### pg_trgm name index (existing DBs)
+
+Needed for similar-to name lookup (and later catalog search):
+
+1. Apply `scripts/migrate_pg_trgm.sql`.
+2. Fresh installs: updated `scripts/schema.sql` already creates the extension and GIN index; skip this migrate script.
+
 ## Import BGG dump
 
 Download a BGG ranks CSV (e.g. `boardgames_ranks.csv`), then:
