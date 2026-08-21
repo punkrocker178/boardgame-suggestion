@@ -13,7 +13,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.bgg.parser import complexity_from_weight
-from app.db.models import CrawlStatus, Game, GameCategory
+from app.db.models import CrawlStatus, Game, GameCategory, GameMechanic
 
 REQUIRED_COLUMNS = [
     "name",
@@ -51,7 +51,11 @@ def encode_player_list(players: list[int] | None) -> str | None:
 
 
 def _document_text(row: dict[str, str]) -> str:
-    return f"{row['name']}. {row['description']}. Categories: {row['categories']}."
+    text = f"{row['name']}. {row['description']}. Categories: {row['categories']}."
+    mechanics = (row.get("mechanics") or "").strip()
+    if mechanics:
+        text += f" Mechanics: {mechanics}."
+    return text
 
 
 def _parse_categories(raw: str) -> list[str]:
@@ -94,7 +98,10 @@ def _eligible_games_filters():
 def _eligible_games_stmt():
     return (
         select(Game)
-        .options(selectinload(Game.categories).selectinload(GameCategory.category))
+        .options(
+            selectinload(Game.categories).selectinload(GameCategory.category),
+            selectinload(Game.mechanics).selectinload(GameMechanic.mechanic),
+        )
         .where(*_eligible_games_filters())
         .order_by(Game.rank.asc().nulls_last(), Game.name.asc())
     )
@@ -104,6 +111,9 @@ def _game_to_row(game: Game) -> dict[str, str]:
     description = game.description or game.name
     categories = ",".join(
         link.category.name.lower().replace(" ", "_") for link in game.categories
+    )
+    mechanics = ",".join(
+        link.mechanic.name.lower().replace(" ", "_") for link in game.mechanics
     )
     complexity = complexity_from_weight(
         float(game.weight) if game.weight is not None else None
@@ -116,6 +126,7 @@ def _game_to_row(game: Game) -> dict[str, str]:
         "max_players": str(game.max_players),
         "play_time_minutes": str(game.playing_time),
         "categories": categories or "strategy",
+        "mechanics": mechanics,
     }
     if complexity:
         row["complexity"] = complexity

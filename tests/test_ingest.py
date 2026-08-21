@@ -5,7 +5,7 @@ import pytest
 from langchain_core.embeddings import FakeEmbeddings
 from sqlalchemy.orm import Session
 
-from app.db.models import Category, CrawlStatus, Game, GameCategory
+from app.db.models import Category, CrawlStatus, Game, GameCategory, GameMechanic, Mechanic
 from app.ingest import (
     IngestError,
     compute_games_watermark,
@@ -42,8 +42,10 @@ def _seed_eligible(session: Session) -> Game:
         updated_at=datetime(2026, 8, 1, tzinfo=UTC),
     )
     session.add(Category(id=1021, name="Economic"))
+    session.add(Mechanic(id=2081, name="Network Building"))
     session.flush()
     game.categories.append(GameCategory(category_id=1021))
+    game.mechanics.append(GameMechanic(mechanic_id=2081))
     session.add(game)
     session.commit()
     return game
@@ -107,6 +109,7 @@ def test_load_games_for_rag_filters_and_formats(db_session: Session) -> None:
     assert rows[0]["year_published"] == "2018"
     assert rows[0]["best_with_players"] == "#3#4#"
     assert rows[0]["recommended_with_players"] == "#2#3#4#"
+    assert rows[0]["mechanics"] == "network_building"
 
 
 def test_load_games_for_rag_skips_invalid_player_range(
@@ -196,6 +199,40 @@ def test_rows_to_documents_metadata() -> None:
     assert docs[0].metadata["min_age"] == 10
     assert docs[0].metadata["year_published"] == 1995
     assert docs[0].metadata["best_with_players"] == "#4#"
+
+
+def test_rows_to_documents_includes_mechanics() -> None:
+    rows = [
+        {
+            "id": "42",
+            "name": "Catan",
+            "description": "Trade and build",
+            "min_players": "3",
+            "max_players": "4",
+            "play_time_minutes": "90",
+            "categories": "strategy",
+            "mechanics": "hexagon_grid,dice_rolling",
+        }
+    ]
+    docs = rows_to_documents(rows)
+    assert "Mechanics: hexagon_grid,dice_rolling." in docs[0].page_content
+    assert "mechanics" not in docs[0].metadata
+
+
+def test_rows_to_documents_omits_mechanics_clause_when_empty() -> None:
+    rows = [
+        {
+            "id": "1",
+            "name": "X",
+            "description": "Y",
+            "min_players": "2",
+            "max_players": "4",
+            "play_time_minutes": "30",
+            "categories": "strategy",
+        }
+    ]
+    docs = rows_to_documents(rows)
+    assert "Mechanics:" not in docs[0].page_content
 
 
 def test_ingest_indexes_correct_count(db_session: Session, tmp_path: Path) -> None:
