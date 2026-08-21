@@ -12,7 +12,7 @@ from app.db.engine import get_session_factory
 from app.ingest import IngestError, count_indexed_games, get_vector_store, ingest_games
 from app.logging_config import configure_logging
 from app.models import HealthResponse, RecommendRequest, RecommendResponse
-from app.query_extractor import extract_filters
+from app.query_extractor import resolve_filters
 from app.recommender import filters_to_applied, synthesize_recommendations
 from app.retriever import retrieve_games
 
@@ -122,14 +122,8 @@ def recommend(request: RecommendRequest) -> RecommendResponse:
 
     settings = app_state.settings
     llm = app_state.llm
-    if llm is None:
-        raise HTTPException(status_code=502, detail={"error": "LLM unavailable"})
 
-    try:
-        filters = extract_filters(llm, request.query)
-    except (APIConnectionError, APIStatusError) as exc:
-        logger.exception("LLM provider unreachable during extraction")
-        raise HTTPException(status_code=502, detail={"error": "LLM unavailable"}) from exc
+    filters = resolve_filters(llm, request.query)
 
     chroma_dir = Path(settings.chroma_persist_dir)
     vector_store = get_vector_store(chroma_dir, get_embeddings(settings))

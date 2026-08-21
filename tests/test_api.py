@@ -78,13 +78,13 @@ def test_recommend_empty_query_returns_422(client: TestClient) -> None:
 
 
 @patch("app.main.synthesize_recommendations")
-@patch("app.main.extract_filters")
+@patch("app.main.resolve_filters")
 def test_recommend_response_shape(
-    mock_extract: MagicMock,
+    mock_resolve: MagicMock,
     mock_synthesize: MagicMock,
     client: TestClient,
 ) -> None:
-    mock_extract.return_value = ExtractedFilters(
+    mock_resolve.return_value = ExtractedFilters(
         player_count=4,
         categories=["strategy"],
         max_play_time_minutes=60,
@@ -119,13 +119,13 @@ def test_recommend_response_shape(
 
 
 @patch("app.main.synthesize_recommendations")
-@patch("app.main.extract_filters")
+@patch("app.main.resolve_filters")
 def test_recommend_filters_applied_includes_similar_to(
-    mock_extract: MagicMock,
+    mock_resolve: MagicMock,
     mock_synthesize: MagicMock,
     client: TestClient,
 ) -> None:
-    mock_extract.return_value = ExtractedFilters(similar_to="Catan")
+    mock_resolve.return_value = ExtractedFilters(similar_to="Catan")
     mock_synthesize.return_value = SynthesisOutput(
         recommendations=[
             GameRecommendation(
@@ -145,9 +145,9 @@ def test_recommend_filters_applied_includes_similar_to(
 
 
 @patch("app.main.synthesize_recommendations")
-@patch("app.main.extract_filters")
+@patch("app.main.resolve_filters")
 def test_recommend_no_games_indexed_returns_503(
-    mock_extract: MagicMock,
+    mock_resolve: MagicMock,
     mock_synthesize: MagicMock,
     client: TestClient,
 ) -> None:
@@ -161,6 +161,52 @@ def test_recommend_no_games_indexed_returns_503(
     app_state.indexing_ok = True
     app_state.indexed_games = 1
     app_state.index_stale = False
+
+
+@patch("app.main.synthesize_recommendations")
+@patch("app.query_extractor.extract_filters")
+def test_recommend_text_path_does_not_call_llm_extract(
+    mock_extract: MagicMock,
+    mock_synthesize: MagicMock,
+    client: TestClient,
+) -> None:
+    mock_extract.side_effect = AssertionError("LLM extract should not run")
+    mock_synthesize.return_value = SynthesisOutput(
+        recommendations=[
+            GameRecommendation(
+                name="Catan",
+                reason="Fits player count.",
+                min_players=3,
+                max_players=4,
+                play_time_minutes=90,
+                categories=["strategy"],
+            )
+        ],
+        reasoning="ok",
+    )
+    response = client.post("/recommend", json={"query": "for 4 players"})
+    assert response.status_code == 200
+    assert response.json()["filters_applied"]["player_count"] == 4
+    mock_extract.assert_not_called()
+
+
+@patch("app.main.synthesize_recommendations")
+def test_recommend_extraction_survives_missing_llm(
+    mock_synthesize: MagicMock,
+    client: TestClient,
+) -> None:
+    mock_synthesize.return_value = SynthesisOutput(
+        recommendations=[],
+        reasoning="none",
+    )
+    previous = app_state.llm
+    app_state.llm = None
+    try:
+        response = client.post("/recommend", json={"query": "for 4 players"})
+        assert response.status_code == 200
+        assert response.json()["filters_applied"]["player_count"] == 4
+    finally:
+        app_state.llm = previous
 
 
 def test_health_degraded_when_index_stale(client: TestClient) -> None:
