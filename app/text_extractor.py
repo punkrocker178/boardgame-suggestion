@@ -5,6 +5,12 @@ import re
 from app.models import ExtractedFilters
 
 _SENTENCE_SPLIT = re.compile(r"[.?!]+")
+_LETTER_TOKEN = re.compile(r"[A-Za-z]+")
+_REPEAT_FOUR = re.compile(r"(.)\1{3,}")
+_VOWELS = set("aeiouyAEIOUY")
+_STRAY_PUNCT = re.compile(r"(?:^|\s)[.?!,:;]+(?=\s|$)")
+_QWERTY_RUN = "qwertyuiopasdfghjklzxcvbnm"
+_QWERTY_RUN_REV = _QWERTY_RUN[::-1]
 
 _WORD_NUMBERS = {
     "one": 1,
@@ -130,6 +136,29 @@ _SIMILAR_TRIGGER_RE = re.compile(
 
 def sentence_count(query: str) -> int:
     return sum(1 for part in _SENTENCE_SPLIT.split(query) if part.strip())
+
+
+def _is_gibberish_token(token: str) -> bool:
+    if len(token) < 3:
+        return False
+    if _REPEAT_FOUR.search(token):
+        return True
+    if not any(char in _VOWELS for char in token):
+        return True
+    lower = token.lower()
+    if len(lower) >= 4 and (lower in _QWERTY_RUN or lower in _QWERTY_RUN_REV):
+        return True
+    return False
+
+
+def sanitize_gibberish(query: str) -> str:
+    def _replace(match: re.Match[str]) -> str:
+        token = match.group(0)
+        return " " if _is_gibberish_token(token) else token
+
+    cleaned = _LETTER_TOKEN.sub(_replace, query)
+    cleaned = _STRAY_PUNCT.sub(" ", cleaned)
+    return re.sub(r"\s+", " ", cleaned).strip()
 
 
 def extract_filters_from_text(query: str) -> ExtractedFilters:

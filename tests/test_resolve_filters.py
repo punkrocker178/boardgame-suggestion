@@ -68,6 +68,35 @@ def test_resolve_keeps_text_when_llm_raises(mock_llm: MagicMock) -> None:
     assert result == extract_filters_from_text(query)
 
 
+def test_should_use_llm_false_when_query_empty() -> None:
+    assert should_use_llm("", ExtractedFilters()) is False
+    assert should_use_llm("   ", ExtractedFilters()) is False
+
+
+@patch("app.query_extractor.extract_filters")
+def test_resolve_skips_llm_when_only_gibberish(mock_llm: MagicMock) -> None:
+    result = resolve_filters(MagicMock(), "xxxx tsk asdf")
+    mock_llm.assert_not_called()
+    assert result == ExtractedFilters()
+
+
+@patch("app.query_extractor.extract_filters")
+def test_resolve_sanitizes_then_skips_llm_when_filters_remain(
+    mock_llm: MagicMock,
+) -> None:
+    result = resolve_filters(MagicMock(), "asdf. asdf. asdf. asdf. for 4 players")
+    mock_llm.assert_not_called()
+    assert result.player_count == 4
+
+
+@patch("app.query_extractor.extract_filters")
+def test_resolve_uses_sanitized_query_for_llm(mock_llm: MagicMock) -> None:
+    mock_llm.return_value = ExtractedFilters(keywords=["fun"])
+    resolve_filters(MagicMock(), "asdf something fun tonight")
+    mock_llm.assert_called_once()
+    assert mock_llm.call_args.args[1] == "something fun tonight"
+
+
 def test_resolve_skips_llm_when_llm_none_and_fallback_indicated() -> None:
     result = resolve_filters(None, "something fun tonight")
     assert result.player_count is None

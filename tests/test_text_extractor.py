@@ -1,7 +1,7 @@
 import pytest
 
 from app.models import ExtractedFilters
-from app.text_extractor import extract_filters_from_text, sentence_count
+from app.text_extractor import extract_filters_from_text, sanitize_gibberish, sentence_count
 
 
 @pytest.mark.parametrize(
@@ -17,6 +17,22 @@ from app.text_extractor import extract_filters_from_text, sentence_count
 )
 def test_sentence_count(query: str, expected: int) -> None:
     assert sentence_count(query) == expected
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        ("asdf for 4 players", "for 4 players"),
+        ("xxxx", ""),
+        ("aaaabcd", ""),
+        ("something fun tonight", "something fun tonight"),
+        ("asdf. asdf. asdf. asdf. for 4 players", "for 4 players"),
+        ("rhythm", "rhythm"),
+        ("  asdf  tsk  ", ""),
+    ],
+)
+def test_sanitize_gibberish(query: str, expected: str) -> None:
+    assert sanitize_gibberish(query) == expected
 
 
 def test_empty_query_returns_empty_filters() -> None:
