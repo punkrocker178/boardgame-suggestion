@@ -2,9 +2,12 @@ import logging
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.prompts import ChatPromptTemplate
+from openai import APIConnectionError, APIStatusError
 
 from app.llm_parsing import invoke_structured
 from app.models import ExtractedFilters
+from app.sql_filters import has_active_hard_filters
+from app.text_extractor import extract_filters_from_text, sentence_count
 
 logger = logging.getLogger(__name__)
 
@@ -64,3 +67,35 @@ def extract_filters(llm: BaseChatModel, query: str) -> ExtractedFilters:
     filters = invoke_structured(llm, EXTRACTION_PROMPT, ExtractedFilters, {"query": query})
     logger.info("Extracted filters: %s", filters.model_dump())
     return filters
+
+
+def should_use_llm(query: str, text_filters: ExtractedFilters) -> bool:
+    if sentence_count(query) > 3:
+        return True
+    if text_filters.similar_to:
+        return False
+    return not has_active_hard_filters(text_filters)
+
+
+def resolve_filters(llm: BaseChatModel | None, query: str) -> ExtractedFilters:
+    text_filters = extract_filters_from_text(query)
+    logger.info("Text filters: %s", text_filters.model_dump())
+    fallback = should_use_llm(query, text_filters)
+    if not fallback:
+        logger.info("extraction_source=text fallback_attempted=false")
+        return text_filters
+    if llm is None:
+        logger.warning("LLM fallback indicated but llm is None; using text filters")
+        logger.info("extraction_source=text fallback_attempted=true")
+        return text_filters
+    try:
+        llm_filters = extract_filters(llm, query)
+        logger.info("extraction_source=llm fallback_attempted=true")
+        return llm_filters
+    except (APIConnectionError, APIStatusError, Exception) as exc:
+        logger.warning(
+            "LLM extraction failed (%s); keeping text filters",
+            type(exc).__name__,
+        )
+        logger.info("extraction_source=text fallback_attempted=true")
+        return text_filters
