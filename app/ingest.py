@@ -230,6 +230,42 @@ def _watermark_path(chroma_dir: Path) -> Path:
     return chroma_dir / WATERMARK_FILENAME
 
 
+def _document_id(doc: Document) -> str:
+    if "game_id" in doc.metadata:
+        return str(doc.metadata["game_id"])
+    return str(doc.metadata["name"])
+
+
+def _staging_is_resumable(staging: Path, current_watermark: str) -> bool:
+    watermark_file = _watermark_path(staging)
+    try:
+        return (
+            staging.exists()
+            and watermark_file.exists()
+            and watermark_file.read_text().strip() == current_watermark
+        )
+    except OSError:
+        return False
+
+
+def _prepare_staging(
+    staging: Path, current_watermark: str, *, force: bool
+) -> bool:
+    resume = (not force) and _staging_is_resumable(staging, current_watermark)
+    if staging.exists() and not resume:
+        shutil.rmtree(staging, ignore_errors=True)
+    return resume and staging.exists()
+
+
+def _collection_ids(store: Chroma) -> set[str]:
+    try:
+        result = store._collection.get()
+        return set(result.get("ids") or [])
+    except Exception:
+        logger.debug("Could not read existing staging IDs", exc_info=True)
+        return set()
+
+
 def _staging_dir(chroma_dir: Path) -> Path:
     return chroma_dir.with_name(chroma_dir.name + "_staging")
 
@@ -348,10 +384,9 @@ def _index_documents_to_dir(
     *,
     batch_size: int,
     max_retries: int,
+    resume: bool = False,
 ) -> None:
     _clear_chroma_client_cache()
-    if target_dir.exists():
-        shutil.rmtree(target_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
 
     store = Chroma(
@@ -360,15 +395,12 @@ def _index_documents_to_dir(
         embedding_function=embeddings,
     )
     try:
-        for batch in _chunks(documents, batch_size):
+        existing = _collection_ids(store) if resume else set()
+        pending = [doc for doc in documents if _document_id(doc) not in existing]
+        for batch in _chunks(pending, batch_size):
             texts = [doc.page_content for doc in batch]
             metadatas = [doc.metadata for doc in batch]
-            ids = [
-                str(doc.metadata["game_id"])
-                if "game_id" in doc.metadata
-                else doc.metadata["name"]
-                for doc in batch
-            ]
+            ids = [_document_id(doc) for doc in batch]
             vectors = embed_documents_with_retry(
                 embeddings, texts, max_retries=max_retries
             )
@@ -410,6 +442,9 @@ def ingest_games(
     rows = load_games_for_rag(session)
     documents = rows_to_documents(rows)
     staging = _staging_dir(chroma_dir)
+    resume = _prepare_staging(staging, current_watermark, force=force)
+    staging.mkdir(parents=True, exist_ok=True)
+    _watermark_path(staging).write_text(current_watermark)
 
     try:
         _index_documents_to_dir(
@@ -418,6 +453,7 @@ def ingest_games(
             embeddings,
             batch_size=batch_size,
             max_retries=max_retries,
+            resume=resume,
         )
         _swap_staging_to_live(staging, chroma_dir)
         watermark_file.write_text(current_watermark)

@@ -24,6 +24,37 @@ class BoomEmbeddings(FakeEmbeddings):
         raise TimeoutError("embedding unavailable")
 
 
+class CountingEmbeddings(FakeEmbeddings):
+    def __init__(self, size: int = 8) -> None:
+        super().__init__(size=size)
+        object.__setattr__(self, "_embedded_texts", [])
+
+    @property
+    def embedded_texts(self) -> list[str]:
+        return object.__getattribute__(self, "_embedded_texts")
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        object.__getattribute__(self, "_embedded_texts").extend(texts)
+        return super().embed_documents(texts)
+
+
+class BoomAfterEmbeddings(FakeEmbeddings):
+    def __init__(self, size: int = 8, *, succeed_calls: int = 1) -> None:
+        super().__init__(size=size)
+        object.__setattr__(self, "_succeed_calls", succeed_calls)
+        object.__setattr__(self, "_calls", 0)
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        object.__setattr__(
+            self, "_calls", object.__getattribute__(self, "_calls") + 1
+        )
+        if object.__getattribute__(self, "_calls") > object.__getattribute__(
+            self, "_succeed_calls"
+        ):
+            raise TimeoutError("embedding unavailable")
+        return super().embed_documents(texts)
+
+
 def _seed_eligible(session: Session) -> Game:
     game = Game(
         id=1,
@@ -48,6 +79,26 @@ def _seed_eligible(session: Session) -> Game:
     session.flush()
     game.categories.append(GameCategory(category_id=1021))
     game.mechanics.append(GameMechanic(mechanic_id=2081))
+    session.add(game)
+    session.commit()
+    return game
+
+
+def _seed_second_eligible(session: Session) -> Game:
+    game = Game(
+        id=2,
+        name="Catan",
+        rank=2,
+        is_expansion=False,
+        crawl_status=CrawlStatus.COMPLETED,
+        description="Trade and build.",
+        min_players=3,
+        max_players=4,
+        playing_time=90,
+        crawled_at=datetime.now(UTC),
+        updated_at=datetime(2026, 8, 2, tzinfo=UTC),
+    )
+    game.categories.append(GameCategory(category_id=1021))
     session.add(game)
     session.commit()
     return game
@@ -352,3 +403,88 @@ def test_swap_succeeds_when_post_swap_rmtree_fails(
 
     assert (live / "new.txt").read_text() == "new"
     assert (tmp_path / "chroma_old" / "live.txt").read_text() == "live"
+
+
+def test_ingest_resumes_staging_without_reembedding_upserted_ids(
+    db_session: Session, tmp_path: Path
+) -> None:
+    _seed_eligible(db_session)
+    _seed_second_eligible(db_session)
+    chroma_dir = tmp_path / "chroma"
+    with pytest.raises(TimeoutError):
+        ingest_games(
+            db_session,
+            chroma_dir,
+            BoomAfterEmbeddings(size=8, succeed_calls=1),
+            batch_size=1,
+            max_retries=0,
+        )
+    staging = tmp_path / "chroma_staging"
+    assert staging.exists()
+    assert (staging / ".games_db_watermark").exists()
+
+    counter = CountingEmbeddings(size=8)
+    second = ingest_games(
+        db_session, chroma_dir, counter, batch_size=1, max_retries=0
+    )
+    assert second.stale is False
+    assert second.indexed_count == 2
+    assert count_indexed_games(chroma_dir, FakeEmbeddings(size=8)) == 2
+    assert len(counter.embedded_texts) == 1
+    assert not staging.exists()
+
+
+def test_ingest_discards_staging_when_watermark_changes(
+    db_session: Session, tmp_path: Path
+) -> None:
+    game = _seed_eligible(db_session)
+    _seed_second_eligible(db_session)
+    chroma_dir = tmp_path / "chroma"
+    with pytest.raises(TimeoutError):
+        ingest_games(
+            db_session,
+            chroma_dir,
+            BoomAfterEmbeddings(size=8, succeed_calls=1),
+            batch_size=1,
+            max_retries=0,
+        )
+    game.name = "Brass: Birmingham (Revised)"
+    game.updated_at = datetime(2026, 8, 12, tzinfo=UTC)
+    db_session.commit()
+
+    counter = CountingEmbeddings(size=8)
+    result = ingest_games(
+        db_session, chroma_dir, counter, batch_size=1, max_retries=0
+    )
+    assert result.stale is False
+    assert result.indexed_count == 2
+    assert count_indexed_games(chroma_dir, FakeEmbeddings(size=8)) == 2
+    assert len(counter.embedded_texts) == 2
+
+
+def test_ingest_force_wipes_staging(
+    db_session: Session, tmp_path: Path
+) -> None:
+    _seed_eligible(db_session)
+    _seed_second_eligible(db_session)
+    chroma_dir = tmp_path / "chroma"
+    with pytest.raises(TimeoutError):
+        ingest_games(
+            db_session,
+            chroma_dir,
+            BoomAfterEmbeddings(size=8, succeed_calls=1),
+            batch_size=1,
+            max_retries=0,
+        )
+    counter = CountingEmbeddings(size=8)
+    result = ingest_games(
+        db_session,
+        chroma_dir,
+        counter,
+        force=True,
+        batch_size=1,
+        max_retries=0,
+    )
+    assert result.skipped is False
+    assert result.indexed_count == 2
+    assert len(counter.embedded_texts) == 2
