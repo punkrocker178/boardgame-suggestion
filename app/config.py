@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     chroma_persist_dir: str = "./data/chroma"
     embedding_batch_size: int = 200
     embedding_max_retries: int = 5
+    embedding_request_delay_seconds: float = 1.0
     log_level: str = "INFO"
 
     database_url: str = "postgresql+psycopg://localhost/boardgame_suggestion"
@@ -88,12 +89,14 @@ def get_embeddings(settings: Settings | None = None) -> Embeddings:
             base_url=OPENROUTER_BASE_URL,
             check_embedding_ctx_length=False,
             model_kwargs={"encoding_format": "float"},
+            max_retries=0,
         )
     if provider == "openai":
         logger.info("Embedding provider=openai model=%s", settings.openai_embedding_model)
         return OpenAIEmbeddings(
             model=settings.openai_embedding_model,
             api_key=settings.openai_api_key,
+            max_retries=0,
         )
     logger.info(
         "Embedding provider=ollama model=%s base_url=%s",
@@ -106,4 +109,5 @@ def get_embeddings(settings: Settings | None = None) -> Embeddings:
         base_url=f"{settings.ollama_base_url.rstrip('/')}/v1",
         check_embedding_ctx_length=False,
         model_kwargs={"encoding_format": "float"},
+        max_retries=0,
     )
