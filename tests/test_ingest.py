@@ -298,7 +298,7 @@ def test_ingest_keeps_live_on_embed_failure(
     assert second.indexed_count == 1
     assert (chroma_dir / ".games_db_watermark").read_text() == watermark_before
     assert count_indexed_games(chroma_dir, ok) == 1
-    assert not (tmp_path / "chroma_staging").exists()
+    assert (tmp_path / "chroma_staging").exists()
 
 
 def test_swap_succeeds_when_leftover_old_cannot_be_deleted(

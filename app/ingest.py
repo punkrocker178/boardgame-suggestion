@@ -422,8 +422,6 @@ def ingest_games(
         _swap_staging_to_live(staging, chroma_dir)
         watermark_file.write_text(current_watermark)
     except Exception:
-        if staging.exists():
-            shutil.rmtree(staging, ignore_errors=True)
         live_count = count_indexed_games(chroma_dir, embeddings)
         if live_count > 0:
             logger.exception(
