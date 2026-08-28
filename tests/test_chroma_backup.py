@@ -1,9 +1,12 @@
+import io
+import tarfile
 from pathlib import Path
 
 import pytest
 
 from app.ingest import WATERMARK_FILENAME
 from scripts.backup_chroma import ChromaArchiveError, backup_chroma, tarball_path
+from scripts.restore_chroma import restore_chroma
 
 
 def _live_dir(tmp_path: Path, *, watermark: str | None = "1:stamp") -> Path:
@@ -21,8 +24,6 @@ def test_tarball_path_uses_persist_dir_name(tmp_path: Path) -> None:
 
 
 def test_backup_writes_chroma_root_and_watermark(tmp_path: Path) -> None:
-    import tarfile
-
     live = _live_dir(tmp_path)
     dest = backup_chroma(live)
     assert dest == tmp_path / "chroma.tar.gz"
@@ -50,3 +51,33 @@ def test_backup_without_watermark_fails_and_leaves_existing_tarball(
 def test_backup_missing_dir_fails(tmp_path: Path) -> None:
     with pytest.raises(ChromaArchiveError):
         backup_chroma(tmp_path / "chroma")
+
+
+def test_restore_replaces_live_and_leaves_staging(tmp_path: Path) -> None:
+    live = _live_dir(tmp_path, watermark="backup-mark")
+    staging = tmp_path / "chroma_staging"
+    staging.mkdir()
+    (staging / "keep.txt").write_text("staging")
+    archive = backup_chroma(live)
+
+    live.joinpath("chroma.sqlite3").write_text("dirty")
+    restore_chroma(archive, live)
+
+    assert (live / WATERMARK_FILENAME).read_text() == "backup-mark"
+    assert (live / "chroma.sqlite3").read_text() == "sqlite"
+    assert (staging / "keep.txt").read_text() == "staging"
+
+
+def test_restore_without_watermark_leaves_live(tmp_path: Path) -> None:
+    live = _live_dir(tmp_path, watermark="live-mark")
+    archive = tmp_path / "chroma.tar.gz"
+    with tarfile.open(archive, "w:gz") as tar:
+        info = tarfile.TarInfo(name="chroma/chroma.sqlite3")
+        data = b"x"
+        info.size = len(data)
+        tar.addfile(info, fileobj=io.BytesIO(data))
+
+    with pytest.raises(ChromaArchiveError):
+        restore_chroma(archive, live)
+
+    assert (live / WATERMARK_FILENAME).read_text() == "live-mark"
