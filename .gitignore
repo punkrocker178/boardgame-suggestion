@@ -3,7 +3,6 @@ __pycache__/
 *.py[cod]
 .env
 data/chroma/
-data/chroma.tar.gz
 .pytest_cache/
 .coverage
 htmlcov/
