@@ -32,7 +32,7 @@ docker compose -f docker-compose.yml up --build
 
 Schema is applied automatically on first Postgres volume init via `scripts/schema.sql`.
 
-Database ops (BGG dump import, backup, restore): [docs/database.md](docs/database.md).
+Database ops (BGG dump import, Postgres and Chroma backup/restore): [docs/database.md](docs/database.md).
 
 ## API
 
