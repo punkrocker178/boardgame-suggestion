@@ -1,6 +1,7 @@
 import logging
 import os
 import shutil
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -30,12 +31,17 @@ WATERMARK_FILENAME = ".games_db_watermark"
 DEFAULT_EMBED_BATCH_SIZE = 200
 DEFAULT_EMBED_MAX_RETRIES = 5
 DEFAULT_EMBED_RETRY_CAP_SECONDS = 60
+DEFAULT_EMBED_REQUEST_DELAY_SECONDS = 0.0
 
 logger = logging.getLogger(__name__)
 
 
 class IngestError(Exception):
     pass
+
+
+class IngestCancelled(BaseException):
+    """Shutdown requested during ingest. Staging is left as a checkpoint."""
 
 
 @dataclass
@@ -298,6 +304,23 @@ def _chunks(items: list, size: int):
         yield items[i : i + size]
 
 
+def _check_cancel(cancel: threading.Event | None) -> None:
+    if cancel is not None and cancel.is_set():
+        raise IngestCancelled()
+
+
+def _interruptible_sleep(
+    seconds: float, cancel: threading.Event | None
+) -> None:
+    if seconds <= 0:
+        return
+    if cancel is None:
+        time.sleep(seconds)
+        return
+    if cancel.wait(timeout=seconds):
+        raise IngestCancelled()
+
+
 def _is_retryable_embed_error(exc: BaseException) -> bool:
     if isinstance(exc, (APIConnectionError, RateLimitError, TimeoutError)):
         return True
@@ -316,11 +339,15 @@ def embed_documents_with_retry(
     *,
     max_retries: int = DEFAULT_EMBED_MAX_RETRIES,
     retry_cap_seconds: float = DEFAULT_EMBED_RETRY_CAP_SECONDS,
+    cancel: threading.Event | None = None,
 ) -> list[list[float]]:
     attempt = 0
     while True:
+        _check_cancel(cancel)
         try:
             return embeddings.embed_documents(texts)
+        except IngestCancelled:
+            raise
         except Exception as exc:
             if not _is_retryable_embed_error(exc) or attempt >= max_retries:
                 raise
@@ -332,7 +359,7 @@ def embed_documents_with_retry(
                 exc,
                 delay,
             )
-            time.sleep(delay)
+            _interruptible_sleep(delay, cancel)
             attempt += 1
 
 
@@ -384,7 +411,9 @@ def _index_documents_to_dir(
     *,
     batch_size: int,
     max_retries: int,
+    request_delay: float = DEFAULT_EMBED_REQUEST_DELAY_SECONDS,
     resume: bool = False,
+    cancel: threading.Event | None = None,
 ) -> None:
     _clear_chroma_client_cache()
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -397,12 +426,16 @@ def _index_documents_to_dir(
     try:
         existing = _collection_ids(store) if resume else set()
         pending = [doc for doc in documents if _document_id(doc) not in existing]
-        for batch in _chunks(pending, batch_size):
+        for i, batch in enumerate(_chunks(pending, batch_size)):
+            _check_cancel(cancel)
+            if i and request_delay > 0:
+                # ponytail: fixed sleep; upgrade: honor Retry-After / X-RateLimit-Reset
+                _interruptible_sleep(request_delay, cancel)
             texts = [doc.page_content for doc in batch]
             metadatas = [doc.metadata for doc in batch]
             ids = [_document_id(doc) for doc in batch]
             vectors = embed_documents_with_retry(
-                embeddings, texts, max_retries=max_retries
+                embeddings, texts, max_retries=max_retries, cancel=cancel
             )
             store._collection.upsert(
                 ids=ids,
@@ -422,6 +455,8 @@ def ingest_games(
     force: bool = False,
     batch_size: int = DEFAULT_EMBED_BATCH_SIZE,
     max_retries: int = DEFAULT_EMBED_MAX_RETRIES,
+    request_delay: float = DEFAULT_EMBED_REQUEST_DELAY_SECONDS,
+    cancel: threading.Event | None = None,
 ) -> IngestResult:
     chroma_dir.mkdir(parents=True, exist_ok=True)
     current_watermark = compute_games_watermark(session)
@@ -453,10 +488,15 @@ def ingest_games(
             embeddings,
             batch_size=batch_size,
             max_retries=max_retries,
+            request_delay=request_delay,
             resume=resume,
+            cancel=cancel,
         )
         _swap_staging_to_live(staging, chroma_dir)
         watermark_file.write_text(current_watermark)
+    except IngestCancelled:
+        logger.info("Indexing cancelled; staging checkpoint kept at %s", staging)
+        raise
     except Exception:
         live_count = count_indexed_games(chroma_dir, embeddings)
         if live_count > 0:

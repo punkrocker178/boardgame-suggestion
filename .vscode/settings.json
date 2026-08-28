@@ -5,12 +5,9 @@
       "name": "boardgame-chroma",
       "driver": "sqlite",
       "connectionType": "socket",
-      "socket": "data/chroma/chroma.sqlite3",
+      "socket": "boardgame-suggestion/data/chroma/chroma.sqlite3",
       "readOnly": false,
       "postConnectionSqlType": "inline",
-      "driverOptions": {
-        "extensions": []
-      },
       "idleTimeout": 0,
       "introspection": {
         "progressive": false

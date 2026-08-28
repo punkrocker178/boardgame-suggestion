@@ -1,6 +1,8 @@
 from datetime import UTC, datetime
 from pathlib import Path
 import shutil
+import threading
+import time
 
 import pytest
 from langchain_core.embeddings import FakeEmbeddings
@@ -8,10 +10,12 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Category, CrawlStatus, Game, GameCategory, GameMechanic, Mechanic
 from app.ingest import (
+    IngestCancelled,
     IngestError,
     _swap_staging_to_live,
     compute_games_watermark,
     count_indexed_games,
+    embed_documents_with_retry,
     encode_player_list,
     ingest_games,
     load_games_for_rag,
@@ -288,6 +292,29 @@ def test_rows_to_documents_omits_mechanics_clause_when_empty() -> None:
     assert "Mechanics:" not in docs[0].page_content
 
 
+def test_ingest_delays_between_embed_batches(
+    db_session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _seed_eligible(db_session)
+    _seed_second_eligible(db_session)
+    slept: list[float] = []
+    monkeypatch.setattr("app.ingest.time.sleep", slept.append)
+    ingest_games(
+        db_session,
+        tmp_path / "chroma",
+        FakeEmbeddings(size=8),
+        batch_size=1,
+        request_delay=1.5,
+    )
+    assert slept == [1.5]
+
+
+def test_embeddings_client_retries_disabled() -> None:
+    from app.config import Settings, get_embeddings
+
+    assert get_embeddings(Settings(openrouter_api_key="x")).max_retries == 0
+
+
 def test_ingest_indexes_correct_count(db_session: Session, tmp_path: Path) -> None:
     _seed_eligible(db_session)
     chroma_dir = tmp_path / "chroma"
@@ -488,3 +515,81 @@ def test_ingest_force_wipes_staging(
     assert result.skipped is False
     assert result.indexed_count == 2
     assert len(counter.embedded_texts) == 2
+
+
+class _CancelAfterFirst(FakeEmbeddings):
+    def __init__(self, cancel: threading.Event, size: int = 8) -> None:
+        super().__init__(size=size)
+        object.__setattr__(self, "_cancel", cancel)
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        vectors = super().embed_documents(texts)
+        object.__getattribute__(self, "_cancel").set()
+        return vectors
+
+
+def test_embed_retry_aborts_on_cancel_during_backoff() -> None:
+    cancel = threading.Event()
+
+    class Boom(FakeEmbeddings):
+        def embed_documents(self, texts: list[str]) -> list[list[float]]:
+            cancel.set()
+            raise TimeoutError("rate limit")
+
+    started = time.monotonic()
+    with pytest.raises(IngestCancelled):
+        embed_documents_with_retry(
+            Boom(size=8), ["x"], max_retries=5, cancel=cancel
+        )
+    assert time.monotonic() - started < 0.5
+
+
+def test_ingest_cancel_keeps_staging_and_does_not_promote(
+    db_session: Session, tmp_path: Path
+) -> None:
+    _seed_eligible(db_session)
+    _seed_second_eligible(db_session)
+    chroma_dir = tmp_path / "chroma"
+    cancel = threading.Event()
+    with pytest.raises(IngestCancelled):
+        ingest_games(
+            db_session,
+            chroma_dir,
+            _CancelAfterFirst(cancel),
+            batch_size=1,
+            max_retries=0,
+            cancel=cancel,
+        )
+    staging = tmp_path / "chroma_staging"
+    assert staging.exists()
+    assert not (chroma_dir / ".games_db_watermark").exists()
+    assert count_indexed_games(chroma_dir, FakeEmbeddings(size=8)) == 0
+
+
+def test_ingest_cancel_does_not_return_stale(
+    db_session: Session, tmp_path: Path
+) -> None:
+    game = _seed_eligible(db_session)
+    chroma_dir = tmp_path / "chroma"
+    ok = FakeEmbeddings(size=8)
+    first = ingest_games(db_session, chroma_dir, ok)
+    assert first.stale is False
+    watermark_before = (chroma_dir / ".games_db_watermark").read_text()
+
+    game.name = "Brass: Birmingham (Revised)"
+    game.updated_at = datetime(2026, 8, 13, tzinfo=UTC)
+    db_session.commit()
+    _seed_second_eligible(db_session)
+
+    cancel = threading.Event()
+    with pytest.raises(IngestCancelled):
+        ingest_games(
+            db_session,
+            chroma_dir,
+            _CancelAfterFirst(cancel),
+            batch_size=1,
+            max_retries=0,
+            cancel=cancel,
+        )
+    assert (chroma_dir / ".games_db_watermark").read_text() == watermark_before
+    assert count_indexed_games(chroma_dir, ok) == 1
