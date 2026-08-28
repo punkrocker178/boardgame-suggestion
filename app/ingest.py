@@ -1,4 +1,5 @@
 import logging
+import os
 import shutil
 import time
 from dataclasses import dataclass
@@ -237,6 +238,25 @@ def _old_dir(chroma_dir: Path) -> Path:
     return chroma_dir.with_name(chroma_dir.name + "_old")
 
 
+def _try_rmtree(path: Path) -> bool:
+    try:
+        shutil.rmtree(path)
+        return True
+    except OSError:
+        logger.warning("Could not remove %s", path, exc_info=True)
+        return False
+
+
+def _unique_old_dir(live: Path) -> Path:
+    candidate = _old_dir(live)
+    if not candidate.exists():
+        return candidate
+    pid_dir = live.with_name(f"{live.name}_old.{os.getpid()}")
+    if not pid_dir.exists():
+        return pid_dir
+    return live.with_name(f"{live.name}_old.{os.getpid()}.{time.time_ns()}")
+
+
 def _chunks(items: list, size: int):
     for i in range(0, len(items), size):
         yield items[i : i + size]
@@ -306,8 +326,8 @@ def count_indexed_games(chroma_dir: Path, embeddings: Embeddings) -> int:
 def _swap_staging_to_live(staging: Path, live: Path) -> None:
     _clear_chroma_client_cache()
     old = _old_dir(live)
-    if old.exists():
-        shutil.rmtree(old)
+    if old.exists() and not _try_rmtree(old):
+        old = _unique_old_dir(live)
     if live.exists():
         live.rename(old)
     try:
@@ -317,7 +337,7 @@ def _swap_staging_to_live(staging: Path, live: Path) -> None:
             old.rename(live)
         raise
     if old.exists():
-        shutil.rmtree(old)
+        _try_rmtree(old)
     _clear_chroma_client_cache()
 
 

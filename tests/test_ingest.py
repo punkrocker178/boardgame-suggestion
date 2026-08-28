@@ -1,5 +1,6 @@
 from datetime import UTC, datetime
 from pathlib import Path
+import shutil
 
 import pytest
 from langchain_core.embeddings import FakeEmbeddings
@@ -8,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.db.models import Category, CrawlStatus, Game, GameCategory, GameMechanic, Mechanic
 from app.ingest import (
     IngestError,
+    _swap_staging_to_live,
     compute_games_watermark,
     count_indexed_games,
     encode_player_list,
@@ -297,3 +299,56 @@ def test_ingest_keeps_live_on_embed_failure(
     assert (chroma_dir / ".games_db_watermark").read_text() == watermark_before
     assert count_indexed_games(chroma_dir, ok) == 1
     assert not (tmp_path / "chroma_staging").exists()
+
+
+def test_swap_succeeds_when_leftover_old_cannot_be_deleted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    live = tmp_path / "chroma"
+    staging = tmp_path / "chroma_staging"
+    old = tmp_path / "chroma_old"
+    live.mkdir()
+    (live / "live.txt").write_text("live")
+    staging.mkdir()
+    (staging / "new.txt").write_text("new")
+    old.mkdir()
+    (old / "stuck.txt").write_text("stuck")
+
+    real_rmtree = shutil.rmtree
+
+    def rmtree(path, *args, **kwargs):
+        target = Path(path)
+        if target.resolve() == old.resolve() or target.name == "chroma_old":
+            raise PermissionError(13, "Permission denied", str(target))
+        real_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr("app.ingest.shutil.rmtree", rmtree)
+
+    _swap_staging_to_live(staging, live)
+
+    assert (live / "new.txt").read_text() == "new"
+    assert not staging.exists()
+    assert old.exists()
+    assert (old / "stuck.txt").exists()
+    assert not list(tmp_path.glob("chroma_old.*"))
+
+
+def test_swap_succeeds_when_post_swap_rmtree_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    live = tmp_path / "chroma"
+    staging = tmp_path / "chroma_staging"
+    live.mkdir()
+    (live / "live.txt").write_text("live")
+    staging.mkdir()
+    (staging / "new.txt").write_text("new")
+
+    def boom(path, *args, **kwargs):
+        raise PermissionError(13, "Permission denied", str(path))
+
+    monkeypatch.setattr("app.ingest.shutil.rmtree", boom)
+
+    _swap_staging_to_live(staging, live)
+
+    assert (live / "new.txt").read_text() == "new"
+    assert (tmp_path / "chroma_old" / "live.txt").read_text() == "live"
