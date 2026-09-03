@@ -1,4 +1,6 @@
 import logging
+import signal
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -9,7 +11,7 @@ from openai import APIConnectionError, APIStatusError
 
 from app.config import Settings, get_embeddings, get_llm, get_settings
 from app.db.engine import get_session_factory
-from app.ingest import IngestError, count_indexed_games, get_vector_store, ingest_games
+from app.ingest import IngestCancelled, IngestError, count_indexed_games, get_vector_store, ingest_games
 from app.logging_config import configure_logging
 from app.models import HealthResponse, RecommendRequest, RecommendResponse
 from app.query_extractor import resolve_filters
@@ -31,7 +33,32 @@ class AppState:
 app_state = AppState()
 
 
-def _run_indexing(settings: Settings) -> None:
+def _chain_cancel_on_signals(cancel: threading.Event):
+    if threading.current_thread() is not threading.main_thread():
+        return lambda: None
+
+    previous: dict[int, object] = {}
+
+    def _handler(signum: int, frame: object) -> None:
+        cancel.set()
+        prev = previous.get(signum)
+        if callable(prev):
+            prev(signum, frame)
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        previous[sig] = signal.getsignal(sig)
+        signal.signal(sig, _handler)
+
+    def restore() -> None:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)  # type: ignore[arg-type]
+
+    return restore
+
+
+def _run_indexing(
+    settings: Settings, cancel: threading.Event | None = None
+) -> None:
     chroma_dir = Path(settings.chroma_persist_dir)
     embeddings = get_embeddings(settings)
     session_factory = get_session_factory()
@@ -42,6 +69,8 @@ def _run_indexing(settings: Settings) -> None:
             embeddings,
             batch_size=settings.embedding_batch_size,
             max_retries=settings.embedding_max_retries,
+            request_delay=settings.embedding_request_delay_seconds,
+            cancel=cancel,
         )
     app_state.indexed_games = result.indexed_count
     app_state.indexing_ok = result.indexed_count > 0
@@ -66,19 +95,27 @@ async def lifespan(_: FastAPI):
     configure_logging(app_state.settings.log_level)
     logger.info("Starting Board Game RAG Game Master")
     app_state.llm = get_llm(app_state.settings)
+    cancel = threading.Event()
+    restore_signals = _chain_cancel_on_signals(cancel)
     try:
-        _run_indexing(app_state.settings)
-    except IngestError:
-        logger.exception("Failed to index games from database")
-        _fallback_to_live_or_down()
-        if not app_state.indexing_ok:
+        try:
+            _run_indexing(app_state.settings, cancel)
+        except IngestCancelled:
+            logger.info("Indexing interrupted; exiting")
             raise
-    except (APIConnectionError, APIStatusError, OSError, RuntimeError):
-        logger.exception("Indexing failed due to provider or runtime error")
-        _fallback_to_live_or_down()
-        if not app_state.indexing_ok:
-            raise
-    yield
+        except IngestError:
+            logger.exception("Failed to index games from database")
+            _fallback_to_live_or_down()
+            if not app_state.indexing_ok:
+                raise
+        except (APIConnectionError, APIStatusError, OSError, RuntimeError):
+            logger.exception("Indexing failed due to provider or runtime error")
+            _fallback_to_live_or_down()
+            if not app_state.indexing_ok:
+                raise
+        yield
+    finally:
+        restore_signals()
 
 
 def _fallback_to_live_or_down() -> None:

@@ -81,6 +81,29 @@ Re-indexing builds into a staging directory and swaps into the live Chroma dir o
 
 Chroma metadata includes players, play time, categories, complexity buckets, raw `weight`, `min_age`, `year_published`, and poll lists (`best_with_players` / `recommended_with_players` as `#n#` tokens). Poll filters apply only when the user explicitly asks (e.g. “best with 4”); plain “for 4 players” uses the box player range.
 
+## Chroma backup
+
+Live index only (`CHROMA_PERSIST_DIR`, default `./data/chroma`). Staging and `chroma_old` are not included.
+
+Stop the API first so `chroma.sqlite3` is complete (wait until ingest/swap finished). Scripts do not lock Chroma.
+
+Canonical local path: `data/chroma.tar.gz` (overwrites that file, via a temp file).
+
+```bash
+# Stop uvicorn / compose api first
+python scripts/backup_chroma.py
+```
+
+Requires live `.games_db_watermark`. If that file is missing, backup fails and the previous tarball is left in place. After a successful ingest swap, the watermark is present.
+
+Restore (API stopped) replaces the live persist dir. `chroma_staging` is left alone.
+
+```bash
+python scripts/restore_chroma.py
+```
+
+Copy `data/chroma.tar.gz` to another machine, place it next to that host’s persist dir (`<persist_dir>.tar.gz`), restore, then start the API. Startup skips re-index only when the restored watermark equals the current eligible-game DB watermark (`count:max(updated_at)`). If the catalog has changed, ingest refreshes as usual (staging resume unchanged).
+
 ## Backup
 
 Prefer custom format (`-Fc`): compressed and works with `pg_restore` options like `-a`.

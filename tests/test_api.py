@@ -1,4 +1,6 @@
 from datetime import UTC, datetime
+import signal
+import threading
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -247,3 +249,26 @@ def test_run_indexing_marks_stale(tmp_path, monkeypatch) -> None:
     assert app_state.indexing_ok is True
     assert app_state.index_stale is True
     assert app_state.indexed_games == 3
+
+
+def test_chain_cancel_on_signals_sets_event_and_calls_previous() -> None:
+    from app.main import _chain_cancel_on_signals
+
+    cancel = threading.Event()
+    previous_calls: list[int] = []
+
+    def previous(signum: int, frame: object) -> None:
+        previous_calls.append(signum)
+
+    old = signal.getsignal(signal.SIGINT)
+    signal.signal(signal.SIGINT, previous)
+    restore = _chain_cancel_on_signals(cancel)
+    try:
+        handler = signal.getsignal(signal.SIGINT)
+        assert callable(handler)
+        handler(signal.SIGINT, None)
+        assert cancel.is_set()
+        assert previous_calls == [signal.SIGINT]
+    finally:
+        restore()
+        signal.signal(signal.SIGINT, old)
