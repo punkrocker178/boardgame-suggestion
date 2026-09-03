@@ -93,7 +93,7 @@ Units:
 1. Pydantic models in `app/models.py`: `SearchRequest`, `SearchGame`, `SearchResponse`, autocomplete request/response.
 2. `search_games(session, request)` — `select(Game)` with `selectinload` of categories, predicates, name match, cursor decode, `limit+1`.
 3. `autocomplete_games(session, q, limit)` — prefix-then-substring list.
-4. Dialect-aware name match: `pg_trgm` on PostgreSQL; `ILIKE` substring on SQLite.
+4. Dialect-aware name match: already implemented in `app/name_match.py` — use `name_match_predicate()` and `name_match_order()` from there. Do not duplicate.
 5. Cursor encode/decode: URL-safe base64 JSON. With `q`: `{ "sim", "rank", "id" }`. Browse: `{ "rank", "id" }`. Invalid or tampered cursor → 400 `{ "error": "Invalid cursor" }`.
 
 Does not depend on Chroma, LLM, or indexing.
