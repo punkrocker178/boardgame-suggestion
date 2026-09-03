@@ -13,7 +13,7 @@ Extract `ExtractedFilters` from `/recommend` queries with a deterministic text e
 |-------|--------|
 | Primary extractor | Rule-based regex + word lists (`app/text_extractor.py`) |
 | LLM extractor | Existing `extract_filters` in `query_extractor.py`; unchanged prompt/schema |
-| When LLM runs | No active hard filters from text **or** sentence count > 3 |
+| When LLM runs | After gibberish sanitize: leftover has no `similar_to` **and** no hard filters, **or** leftover sentence count > 3. Empty leftover → no LLM. |
 | Combine results | LLM **replaces** the text result (no field merge) |
 | LLM failure / `llm is None` | Keep text filters; no 502 at extraction |
 | Hard filters | Reuse `has_active_hard_filters` (keywords do not count) |
@@ -26,23 +26,38 @@ Extract `ExtractedFilters` from `/recommend` queries with a deterministic text e
 
 ```
 query
-  → extract_filters_from_text(query) → text_filters
-  → if should_use_llm(query, text_filters) and llm is not None:
-        try extract_filters(llm, query) → return llm_filters
+  → sanitize_gibberish(query) → working
+  → extract_filters_from_text(working) → text_filters
+  → if should_use_llm(working, text_filters) and llm is not None:
+        try extract_filters(llm, working) → return llm_filters
         except provider/parse error → log warning; return text_filters
   → else return text_filters
 ```
 
-`should_use_llm` is true when:
+`should_use_llm` is true when leftover `working` is non-empty **and**:
 
-1. `not has_active_hard_filters(text_filters)`, or
-2. `sentence_count(query) > 3`
+1. `sentence_count(working) > 3`, or
+2. text did not set `similar_to` **and** `not has_active_hard_filters(text_filters)`
+
+Empty leftover (all tokens were gibberish) never calls the LLM.
+
+### Gibberish sanitize
+
+`sanitize_gibberish` removes letter tokens of length ≥ 3 that are:
+
+- four or more identical letters in a row, or
+- have no vowel in `aeiouy`, or
+- length ≥ 4 and a contiguous run on the QWERTY rows (`qwertyuiopasdfghjklzxcvbnm`) or the reverse run
+
+Replacement is a space; leftover punctuation with no words is dropped; whitespace is collapsed. Text extract, sentence count, and LLM fallback all use the sanitized string.
+
+`similar_to` is not a SQL hard filter (`HARD_FILTER_FIELDS` unchanged). It still suppresses LLM fallback on short queries so `"games like Catan"` stays on the text path.
 
 Units:
 
 | Unit | Responsibility |
 |------|----------------|
-| `sentence_count(query) -> int` | Split on `. ? !`; strip; drop empty chunks |
+| `sanitize_gibberish(query) -> str` | Strip keyboard-smash / no-vowel / repeated-letter tokens |
 | `extract_filters_from_text(query) -> ExtractedFilters` | Regex/word lists only |
 | `extract_filters(llm, query)` | Existing LLM path |
 | `resolve_filters(llm: BaseChatModel \| None, query) -> ExtractedFilters` | Orchestration |
@@ -102,13 +117,30 @@ Do not map category-ish words (`party`, `family`, `strategy`) to complexity.
 - `min_year`: `"after 2020"`, `"since 2018"`, `"from 2015"`.
 - `max_year`: `"before 2010"`.
 
+### Similar-to
+
+`similar_to` is the referenced **game name only**. Set it only on an explicit cue. Do not guess.
+
+**Triggers** (case-insensitive):
+
+- `similar to X`
+- `alternatives to X` / `alternative to X`
+- `games like X` / `game like X` / `something like X`
+- bare `like X` (so `"like Catan for 4"` works)
+
+**Name capture:** from the end of the trigger to the first stop: sentence end (`. ? !`), another trigger, or a known filter span (players, play time, complexity/weight, age, year, best/recommended). Strip wrapping quotes. `"like Ticket to Ride for 4"` → `similar_to="Ticket to Ride"` and `player_count=4`.
+
+**Keywords:** do not add that name to `keywords`.
+
+**Do not set** `similar_to` when the only cue is `like` immediately followed by a **category alias** (e.g. `"I like strategy games"`). Lookup miss on a non-game string is acceptable: retrieval embeds the user query.
+
 ### Categories
 
 A small alias map to BGG-style labels (e.g. strategy, party, card game, cooperative/coop). Unknown phrases are not written to `categories`. Retrieval still runs `apply_category_normalization`; leftovers become keywords there.
 
 ### Keywords
 
-After matched spans are removed, leftover content words become `keywords`. Drop a small English stopword list. The raw query is still passed to Chroma; keywords are a boost only.
+After matched spans are removed (including the `similar_to` trigger and captured name), leftover content words become `keywords`. Drop a small English stopword list. The raw query is still passed to Chroma; keywords are a boost only.
 
 ## Error handling
 
@@ -123,13 +155,14 @@ Log text filters, whether fallback was attempted, `extraction_source=text|llm`, 
 
 ## Testing
 
-- Table-driven unit tests per field, including complexity synonyms and the `"8+"` vs `"8-year-old"` split.
+- Table-driven unit tests per field, including complexity synonyms, the `"8+"` vs `"8-year-old"` split, and `similar_to` phrases (`games like Catan`, `similar to Ticket to Ride`, `like Catan for 4`, `I like strategy games` → no `similar_to`).
 - `sentence_count` for 1, 3, 4 sentences and `?` / `!`.
 - `resolve_filters`:
   1. Short query with hard filters → LLM not called.
-  2. No hard filters → LLM called; LLM result used.
-  3. More than 3 sentences → LLM called even if text found filters; LLM result used.
-  4. LLM raises → text filters kept.
+  2. Short query with only `similar_to` → LLM not called.
+  3. No `similar_to` and no hard filters → LLM called; LLM result used.
+  4. More than 3 sentences → LLM called even if text found filters or `similar_to`; LLM result used.
+  5. LLM raises → text filters kept.
 - API: `/recommend` extraction no longer requires a live LLM when text extraction succeeds and fallback is not indicated. Synthesis remains mocked/LLM-backed as today.
 
 ## Out of scope

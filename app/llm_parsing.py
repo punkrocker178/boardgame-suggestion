@@ -6,7 +6,7 @@ from typing import TypeVar
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import BaseMessage
 from langchain_core.prompts import ChatPromptTemplate
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -29,6 +29,25 @@ def parse_model_response(text: str, model: type[T]) -> T:
     return model.model_validate(payload)
 
 
+def _try_parse_fenced_response(text: str, model: type[T]) -> T | None:
+    try:
+        return parse_model_response(text, model)
+    except (json.JSONDecodeError, ValidationError):
+        return None
+
+
+def _recover_from_validation_error(exc: ValidationError, model: type[T]) -> T | None:
+    for err in exc.errors():
+        if err.get("type") != "json_invalid":
+            continue
+        raw = err.get("input")
+        if isinstance(raw, str):
+            parsed = _try_parse_fenced_response(raw, model)
+            if parsed is not None:
+                return parsed
+    return None
+
+
 def invoke_structured(
     llm: BaseChatModel,
     prompt: ChatPromptTemplate,
@@ -42,9 +61,31 @@ def invoke_structured(
         if isinstance(result, model):
             logger.debug("Structured output succeeded for %s", model.__name__)
             return result
+        if isinstance(result, str):
+            parsed = _try_parse_fenced_response(result, model)
+            if parsed is not None:
+                logger.debug("Structured output recovered fenced JSON for %s", model.__name__)
+                return parsed
         parsed = model.model_validate(result)
         logger.debug("Structured output validated for %s", model.__name__)
         return parsed
+    except ValidationError as exc:
+        recovered = _recover_from_validation_error(exc, model)
+        if recovered is not None:
+            logger.debug(
+                "Structured output recovered %s from fenced JSON in validation error",
+                model.__name__,
+            )
+            return recovered
+        logger.warning(
+            "Structured output failed for %s (%s); falling back to manual JSON parse",
+            model.__name__,
+            type(exc).__name__,
+        )
+        response = (prompt | llm).invoke(variables)
+        content = _message_content(response)
+        logger.debug("Raw LLM response for %s: %s", model.__name__, content)
+        return parse_model_response(content, model)
     except Exception as exc:
         logger.warning(
             "Structured output failed for %s (%s); falling back to manual JSON parse",
