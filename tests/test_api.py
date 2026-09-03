@@ -192,21 +192,19 @@ def test_recommend_text_path_does_not_call_llm_extract(
     mock_extract.assert_not_called()
 
 
-@patch("app.main.synthesize_recommendations")
-def test_recommend_extraction_survives_missing_llm(
-    mock_synthesize: MagicMock,
+@patch("app.main.resolve_filters")
+def test_recommend_missing_llm_returns_502_after_extraction(
+    mock_resolve: MagicMock,
     client: TestClient,
 ) -> None:
-    mock_synthesize.return_value = SynthesisOutput(
-        recommendations=[],
-        reasoning="none",
-    )
+    mock_resolve.return_value = ExtractedFilters(player_count=4)
     previous = app_state.llm
     app_state.llm = None
     try:
         response = client.post("/recommend", json={"query": "for 4 players"})
-        assert response.status_code == 200
-        assert response.json()["filters_applied"]["player_count"] == 4
+        assert response.status_code == 502
+        assert response.json()["error"] == "LLM unavailable"
+        mock_resolve.assert_called_once()
     finally:
         app_state.llm = previous
 

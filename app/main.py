@@ -170,6 +170,9 @@ def recommend(request: RecommendRequest) -> RecommendResponse:
             session, vector_store, filters, request.query, top_k=5
         )
 
+    if llm is None:
+        raise HTTPException(status_code=502, detail={"error": "LLM unavailable"})
+
     try:
         synthesis = synthesize_recommendations(llm, request.query, filters, candidates)
     except (APIConnectionError, APIStatusError) as exc:
