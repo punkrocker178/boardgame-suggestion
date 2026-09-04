@@ -4,7 +4,7 @@ from __future__ import annotations
 import base64
 import json
 
-from sqlalchemy import and_, case, func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.db.models import Game, GameCategory
@@ -157,17 +157,23 @@ def search_games(session: Session, request: SearchRequest) -> SearchResponse:
 
 
 def autocomplete_games(session: Session, q: str, limit: int) -> AutocompleteResponse:
+    # Prefix first (ILIKE 'q%'), then substring fill. Avoids sorting every '%q%'
+    # hit; gin_trgm_ops can still serve both patterns (not btree).
+    order = (Game.rank.asc().nulls_last(), Game.id.asc())
     prefix_pred = Game.name.ilike(f"{q}%")
-    substr_pred = Game.name.ilike(f"%{q}%")
-    is_prefix = case((prefix_pred, 0), else_=1)
-
-    stmt = (
-        select(Game)
-        .where(substr_pred)
-        .order_by(is_prefix, Game.rank.asc().nulls_last(), Game.id.asc())
-        .limit(limit)
+    rows = list(
+        session.scalars(select(Game).where(prefix_pred).order_by(*order).limit(limit)).all()
     )
-    rows = list(session.scalars(stmt).all())
+    if len(rows) < limit:
+        rest = list(
+            session.scalars(
+                select(Game)
+                .where(Game.name.ilike(f"%{q}%"), ~prefix_pred)
+                .order_by(*order)
+                .limit(limit - len(rows))
+            ).all()
+        )
+        rows = [*rows, *rest]
     return AutocompleteResponse(
         suggestions=[
             AutocompleteGame(id=g.id, name=g.name, year_published=g.year_published)

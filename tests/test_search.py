@@ -251,6 +251,14 @@ def test_autocomplete_limit(search_session):
     assert len(resp.suggestions) <= 2
 
 
+def test_autocomplete_fills_substring_after_prefix(search_session):
+    from app.search import autocomplete_games
+
+    with search_session() as session:
+        resp = autocomplete_games(session, "a", 2)
+    assert [s.name for s in resp.suggestions] == ["Azul", "Catan"]
+
+
 @pytest.fixture
 def search_client(tmp_path, monkeypatch):
     from app.main import app
