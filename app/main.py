@@ -4,7 +4,7 @@ import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from langchain_core.language_models import BaseChatModel
 from openai import APIConnectionError, APIStatusError
@@ -13,7 +13,15 @@ from app.config import Settings, get_embeddings, get_llm, get_settings
 from app.db.engine import get_session_factory
 from app.ingest import IngestCancelled, IngestError, count_indexed_games, get_vector_store, ingest_games
 from app.logging_config import configure_logging
-from app.models import HealthResponse, RecommendRequest, RecommendResponse
+from app.models import (
+    AutocompleteResponse,
+    HealthResponse,
+    RecommendRequest,
+    RecommendResponse,
+    SearchRequest,
+    SearchResponse,
+)
+from app.search import autocomplete_games, search_games
 from app.query_extractor import resolve_filters
 from app.recommender import filters_to_applied, synthesize_recommendations
 from app.retriever import retrieve_games
@@ -191,6 +199,30 @@ def recommend(request: RecommendRequest) -> RecommendResponse:
         filters_relaxed,
     )
     return response
+
+
+@app.post("/search", response_model=SearchResponse)
+def search(request: SearchRequest) -> SearchResponse:
+    logger.info("POST /search q=%r limit=%d", request.q, request.limit)
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        try:
+            return search_games(session, request)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400, detail={"error": "Invalid cursor"}
+            ) from exc
+
+
+@app.get("/search/autocomplete", response_model=AutocompleteResponse)
+def autocomplete(
+    q: str = Query(min_length=2),
+    limit: int = Query(default=10, ge=1, le=20),
+) -> AutocompleteResponse:
+    logger.info("GET /search/autocomplete q=%r", q)
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        return autocomplete_games(session, q, limit)
 
 
 @app.exception_handler(HTTPException)

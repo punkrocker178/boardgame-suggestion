@@ -100,3 +100,51 @@ class ExtractedFilters(BaseModel):
 class HealthResponse(BaseModel):
     status: Literal["ok", "degraded"]
     indexed_games: int
+
+
+class SearchRequest(BaseModel):
+    q: str | None = None
+    limit: int = Field(default=20, ge=1, le=50)
+    cursor: str | None = None
+    player_count: int | None = None
+    categories: list[str] | None = None
+    max_play_time_minutes: int | None = None
+    complexity: Literal["light", "medium", "heavy"] | None = None
+    min_weight: float | None = None
+    max_weight: float | None = None
+    min_age: int | None = None
+    max_age: int | None = None
+    min_year: int | None = None
+    max_year: int | None = None
+    best_with_player_count: int | None = None
+    recommended_with_player_count: int | None = None
+
+
+class SearchGame(BaseModel):
+    id: int
+    name: str
+    year_published: int | None
+    rank: int | None
+    is_expansion: bool
+    min_players: int | None
+    max_players: int | None
+    playing_time: int | None
+    min_age: int | None
+    weight: float | None
+    thumbnail_url: str | None
+    categories: list[str]
+
+
+class SearchResponse(BaseModel):
+    items: list[SearchGame]
+    next_cursor: str | None
+
+
+class AutocompleteGame(BaseModel):
+    id: int
+    name: str
+    year_published: int | None
+
+
+class AutocompleteResponse(BaseModel):
+    suggestions: list[AutocompleteGame]
