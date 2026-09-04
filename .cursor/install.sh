@@ -49,13 +49,10 @@ CHROMA_PERSIST_DIR=./data/chroma
 EMBEDDING_BATCH_SIZE=200
 EMBEDDING_REQUEST_DELAY_SECONDS=1
 LOG_LEVEL=INFO
-DATABASE_URL=postgresql+psycopg://boardgame:boardgame@localhost:5432/boardgame_suggestion
+  DATABASE_URL=postgresql+psycopg://boardgame:boardgame@localhost:5432/boardgame_suggestion
 EOF
 fi
 
-# Warm the Chroma index so fresh agents skip re-embedding on first boot.
-# Requires a provider key at build/setup time; skipped (and done lazily on boot) otherwise.
-if [ -n "${OPENROUTER_API_KEY:-}" ]; then
-  ./.venv/bin/python -c "from app.config import get_settings; from app.main import _run_indexing; _run_indexing(get_settings())" \
-    || echo "warm-index failed; API will index on first boot"
-fi
+# The API is not started automatically: on first run it embeds the whole catalog
+# into Chroma, which needs a provider key (OPENROUTER_API_KEY) and is slow/costly.
+# Run it manually when ready:  ./.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000

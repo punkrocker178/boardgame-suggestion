@@ -2,13 +2,6 @@
   "name": "Board Game RAG Game Master",
   "install": "bash .cursor/install.sh",
   "start": "bash .cursor/start.sh",
-  "terminals": [
-    {
-      "name": "api",
-      "command": "./.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload",
-      "description": "FastAPI app. Indexes the catalog into Chroma on first boot, then serves /health and /recommend. Requires OPENROUTER_API_KEY (or another provider key) to start."
-    }
-  ],
   "ports": [
     {
       "name": "api",
