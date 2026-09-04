@@ -3,6 +3,12 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# LFS leaves a tiny pointer when GitHub bandwidth quota blocks the blob.
+_is_real_file() {
+  [ -f "$1" ] || return 1
+  ! head -1 "$1" | grep -q '^version https://git-lfs.github.com/spec/v1'
+}
+
 # archive.ubuntu.com is unreachable from Cloud Agent egress; use the Azure mirror.
 if grep -q 'archive.ubuntu.com\|security.ubuntu.com' /etc/apt/sources.list.d/ubuntu.sources 2>/dev/null; then
   sudo sed -i \
@@ -37,6 +43,12 @@ if [ "${games:-0}" -eq 0 ]; then
     --clean --if-exists --no-owner data/boardgame.dump
 fi
 
+# Restore the committed Chroma backup when the live index is missing. Skip when
+# clone left an LFS pointer (see .lfsconfig skipdownloaderrors).
+if [ ! -f data/chroma/.games_db_watermark ] && _is_real_file data/chroma.tar.gz; then
+  ./.venv/bin/python scripts/restore_chroma.py
+fi
+
 # Local .env for the app. Secrets (OPENROUTER_API_KEY) arrive as injected env vars,
 # which pydantic-settings prioritizes over this file.
 if [ ! -f .env ]; then
@@ -53,6 +65,6 @@ DATABASE_URL=postgresql+psycopg://boardgame:boardgame@localhost:5432/boardgame_s
 EOF
 fi
 
-# The API is not started automatically: on first run it embeds the whole catalog
-# into Chroma, which needs a provider key (OPENROUTER_API_KEY) and is slow/costly.
-# Run it manually when ready:  ./.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+# The API is not started automatically. Without a restored Chroma index, first
+# startup embeds the whole catalog (needs OPENROUTER_API_KEY, slow/costly).
+# Run manually when ready:  ./.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000

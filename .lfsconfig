@@ -1,0 +1,4 @@
+[lfs]
+	# Cloud agents share ~1 GiB/month GitHub LFS bandwidth. Leave pointers on
+	# download failure instead of aborting clone/checkout.
+	skipdownloaderrors = true
