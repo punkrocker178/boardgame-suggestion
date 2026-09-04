@@ -49,7 +49,7 @@ CHROMA_PERSIST_DIR=./data/chroma
 EMBEDDING_BATCH_SIZE=200
 EMBEDDING_REQUEST_DELAY_SECONDS=1
 LOG_LEVEL=INFO
-  DATABASE_URL=postgresql+psycopg://boardgame:boardgame@localhost:5432/boardgame_suggestion
+DATABASE_URL=postgresql+psycopg://boardgame:boardgame@localhost:5432/boardgame_suggestion
 EOF
 fi
 
