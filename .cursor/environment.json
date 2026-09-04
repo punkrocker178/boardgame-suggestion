@@ -1,0 +1,11 @@
+{
+  "name": "Board Game RAG Game Master",
+  "install": "bash .cursor/install.sh",
+  "start": "bash .cursor/start.sh",
+  "ports": [
+    {
+      "name": "api",
+      "port": 8000
+    }
+  ]
+}
