@@ -4,16 +4,16 @@ from langchain_chroma import Chroma
 from langchain_core.documents import Document
 from sqlalchemy.orm import Session
 
-from app.category_normalize import apply_category_normalization
-from app.ingest import _document_text, _game_to_row
-from app.models import ExtractedFilters
-from app.name_match import lookup_indexed_game_by_name
-from app.sql_filters import (
+from app.api.models import ExtractedFilters
+from app.helpers.category_normalize import apply_category_normalization
+from app.helpers.name_match import lookup_indexed_game_by_name
+from app.helpers.sql_filters import (
     CANDIDATE_ID_LIMIT,
     fetch_candidate_ids,
     has_active_hard_filters,
     next_relaxation,
 )
+from app.services.ingest import _document_text, _game_to_row
 
 logger = logging.getLogger(__name__)
 

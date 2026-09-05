@@ -5,7 +5,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.conversation_store import (
+from app.services.conversation_store import (
     RECENT_TURN_LIMIT,
     append_turn,
     count_turns,

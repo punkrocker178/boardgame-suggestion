@@ -5,7 +5,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
 
 from app.db.models import Message
-from app.llm_parsing import invoke_structured
+from app.helpers.llm_parsing import invoke_structured
 
 
 class StandaloneQuery(BaseModel):

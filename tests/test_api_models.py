@@ -3,7 +3,7 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
-from app.models import RecommendRequest
+from app.api.models import RecommendRequest
 
 
 def test_recommend_request_requires_conversation_id() -> None:

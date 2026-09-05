@@ -1,6 +1,6 @@
 from unittest.mock import MagicMock
 
-from app.contextualizer import contextualize_query, summarize_dropped_turn
+from app.services.contextualizer import contextualize_query, summarize_dropped_turn
 from app.db.models import Message
 
 
@@ -12,7 +12,7 @@ def test_contextualize_skips_llm_without_history() -> None:
 
 
 def test_contextualize_calls_llm_with_history(monkeypatch) -> None:
-    from app import contextualizer as mod
+    from app.services import contextualizer as mod
 
     calls: list[dict] = []
 
@@ -37,7 +37,7 @@ def test_contextualize_calls_llm_with_history(monkeypatch) -> None:
 
 
 def test_summarize_dropped_turn(monkeypatch) -> None:
-    from app import contextualizer as mod
+    from app.services import contextualizer as mod
 
     def fake_invoke(llm, prompt, model, variables):
         return model(summary="User wants 4-player games.")

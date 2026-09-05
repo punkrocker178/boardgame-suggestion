@@ -2,7 +2,7 @@ from sqlalchemy import func, select, true
 from sqlalchemy.orm import Session, selectinload
 
 from app.db.models import Game, GameCategory, GameMechanic
-from app.ingest import _eligible_games_filters
+from app.services.ingest import _eligible_games_filters
 
 PG_TRGM_MIN_SIMILARITY = 0.3
 

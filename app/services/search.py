@@ -8,7 +8,7 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.db.models import Game, GameCategory
-from app.models import (
+from app.api.models import (
     AutocompleteGame,
     AutocompleteResponse,
     ExtractedFilters,
@@ -16,13 +16,13 @@ from app.models import (
     SearchRequest,
     SearchResponse,
 )
-from app.name_match import (
+from app.helpers.name_match import (
     PG_TRGM_MIN_SIMILARITY,
     _dialect_name,
     name_match_order,
     name_match_predicate,
 )
-from app.sql_filters import build_filter_predicates
+from app.helpers.sql_filters import build_filter_predicates
 
 
 def encode_cursor(data: dict) -> str:

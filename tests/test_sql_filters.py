@@ -5,8 +5,8 @@ import pytest
 from sqlalchemy.orm import Session
 
 from app.db.models import Category, CrawlStatus, Game, GameCategory
-from app.models import ExtractedFilters
-from app.sql_filters import (
+from app.api.models import ExtractedFilters
+from app.helpers.sql_filters import (
     CANDIDATE_ID_LIMIT,
     fetch_candidate_ids,
     has_active_hard_filters,

@@ -1,7 +1,7 @@
 import pytest
 
-from app.models import ExtractedFilters
-from app.text_extractor import extract_filters_from_text, sanitize_gibberish, sentence_count
+from app.api.models import ExtractedFilters
+from app.helpers.text_extractor import extract_filters_from_text, sanitize_gibberish, sentence_count
 
 
 @pytest.mark.parametrize(

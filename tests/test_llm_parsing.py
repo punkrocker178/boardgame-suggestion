@@ -1,13 +1,13 @@
 import pytest
 from pydantic import ValidationError
 
-from app.llm_parsing import (
+from app.helpers.llm_parsing import (
     _recover_from_validation_error,
     parse_model_response,
     strip_json_fences,
 )
-from app.models import ExtractedFilters
-from app.recommender import SynthesisOutput
+from app.api.models import ExtractedFilters
+from app.services.recommender import SynthesisOutput
 
 
 def test_strip_json_fences() -> None:
