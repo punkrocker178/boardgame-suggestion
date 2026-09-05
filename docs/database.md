@@ -54,6 +54,13 @@ Needed for similar-to name lookup (and later catalog search):
 1. Apply `scripts/migrate_pg_trgm.sql`.
 2. Fresh installs: updated `scripts/schema.sql` already creates the extension and GIN index; skip this migrate script.
 
+### Conversations (existing DBs)
+
+Needed for multi-turn `/recommend`:
+
+1. Apply `scripts/migrate_conversations.sql`.
+2. Fresh installs: updated `scripts/schema.sql` already creates the tables; skip this migrate script.
+
 ## Import BGG dump
 
 Download a BGG ranks CSV (e.g. `boardgames_ranks.csv`), then:

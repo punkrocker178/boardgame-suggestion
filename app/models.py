@@ -1,11 +1,20 @@
 from typing import Literal
+from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
 
 
+class ConversationCreateRequest(BaseModel):
+    title: str | None = None
+
+
+class ConversationCreateResponse(BaseModel):
+    id: UUID
+
+
 class RecommendRequest(BaseModel):
     query: str = Field(min_length=1)
-    session_id: str | None = None
+    conversation_id: UUID
 
 
 class GameRecommendation(BaseModel):
@@ -39,6 +48,8 @@ class RecommendResponse(BaseModel):
     reasoning: str
     filters_applied: FiltersApplied
     filters_relaxed: bool = False
+    conversation_id: UUID
+    standalone_query: str
 
 
 class ExtractedFilters(BaseModel):

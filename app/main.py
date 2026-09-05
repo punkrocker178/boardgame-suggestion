@@ -1,3 +1,4 @@
+import json
 import logging
 import signal
 import threading
@@ -8,16 +9,30 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from langchain_core.language_models import BaseChatModel
 from openai import APIConnectionError, APIStatusError
+from pydantic import ValidationError
 
 from app.config import Settings, get_embeddings, get_llm, get_settings
+from app.contextualizer import contextualize_query, summarize_dropped_turn
+from app.conversation_store import (
+    RECENT_TURN_LIMIT,
+    append_turn,
+    count_turns,
+    create_conversation,
+    get_conversation,
+    load_recent_messages,
+    load_turn_pair_at_index,
+    set_summary,
+)
 from app.db.engine import get_session_factory
 from app.ingest import IngestCancelled, IngestError, count_indexed_games, get_vector_store, ingest_games
 from app.logging_config import configure_logging
 from app.models import (
-    AutocompleteResponse,
+    ConversationCreateRequest,
+    ConversationCreateResponse,
     HealthResponse,
     RecommendRequest,
     RecommendResponse,
+    AutocompleteResponse,
     SearchRequest,
     SearchResponse,
 )
@@ -159,40 +174,121 @@ def health() -> HealthResponse:
     return HealthResponse(status="degraded", indexed_games=app_state.indexed_games)
 
 
+@app.post("/conversations", response_model=ConversationCreateResponse, status_code=201)
+def create_conversation_endpoint(
+    request: ConversationCreateRequest | None = None,
+) -> ConversationCreateResponse:
+    body = request or ConversationCreateRequest()
+    session_factory = get_session_factory()
+    with session_factory() as session:
+        conv = create_conversation(session, title=body.title)
+        session.commit()
+        return ConversationCreateResponse(id=conv.id)
+
+
 @app.post("/recommend", response_model=RecommendResponse)
 def recommend(request: RecommendRequest) -> RecommendResponse:
-    logger.info("POST /recommend query=%r session_id=%s", request.query, request.session_id)
+    logger.info(
+        "POST /recommend query=%r conversation_id=%s",
+        request.query,
+        request.conversation_id,
+    )
     if not app_state.indexing_ok or app_state.indexed_games == 0:
         raise HTTPException(status_code=503, detail={"error": "No games indexed"})
 
     settings = app_state.settings
     llm = app_state.llm
+    session_factory = get_session_factory()
 
-    filters = resolve_filters(llm, request.query)
+    with session_factory() as session:
+        conv = get_conversation(session, request.conversation_id)
+        if conv is None:
+            raise HTTPException(status_code=404, detail={"error": "Conversation not found"})
+        recent = load_recent_messages(session, request.conversation_id)
+        summary = conv.summary
+
+    if recent and llm is None:
+        raise HTTPException(status_code=502, detail={"error": "LLM unavailable"})
+
+    try:
+        standalone_query = contextualize_query(
+            llm,
+            query=request.query,
+            summary=summary,
+            recent_messages=recent,
+        )
+    except (APIConnectionError, APIStatusError, ValidationError, json.JSONDecodeError) as exc:
+        logger.exception("Contextualizer failed")
+        raise HTTPException(status_code=502, detail={"error": "LLM unavailable"}) from exc
+
+    filters = resolve_filters(llm, standalone_query)
 
     chroma_dir = Path(settings.chroma_persist_dir)
     vector_store = get_vector_store(chroma_dir, get_embeddings(settings))
-    session_factory = get_session_factory()
     with session_factory() as session:
         candidates, filters_relaxed = retrieve_games(
-            session, vector_store, filters, request.query, top_k=5
+            session, vector_store, filters, standalone_query, top_k=5
         )
 
     if llm is None:
         raise HTTPException(status_code=502, detail={"error": "LLM unavailable"})
 
     try:
-        synthesis = synthesize_recommendations(llm, request.query, filters, candidates)
+        synthesis = synthesize_recommendations(
+            llm, standalone_query, filters, candidates
+        )
     except (APIConnectionError, APIStatusError) as exc:
         logger.exception("LLM provider unreachable during synthesis")
         raise HTTPException(status_code=502, detail={"error": "LLM unavailable"}) from exc
 
+    applied = filters_to_applied(filters)
     response = RecommendResponse(
         recommendations=synthesis.recommendations,
         reasoning=synthesis.reasoning,
-        filters_applied=filters_to_applied(filters),
+        filters_applied=applied,
         filters_relaxed=filters_relaxed,
+        conversation_id=request.conversation_id,
+        standalone_query=standalone_query,
     )
+
+    payload = {
+        "reasoning": response.reasoning,
+        "recommendations": [r.model_dump() for r in response.recommendations],
+        "filters_applied": applied.model_dump(),
+        "filters_relaxed": filters_relaxed,
+        "standalone_query": standalone_query,
+    }
+
+    with session_factory() as session:
+        append_turn(
+            session,
+            request.conversation_id,
+            user_content=request.query,
+            standalone_query=standalone_query,
+            assistant_content=response.reasoning,
+            assistant_payload=payload,
+        )
+        session.commit()
+
+        turns = count_turns(session, request.conversation_id)
+        if turns > RECENT_TURN_LIMIT:
+            dropped_index = turns - RECENT_TURN_LIMIT - 1
+            pair = load_turn_pair_at_index(session, request.conversation_id, dropped_index)
+            if pair is not None:
+                user_msg, assistant_msg = pair
+                try:
+                    conv_after = get_conversation(session, request.conversation_id)
+                    new_summary = summarize_dropped_turn(
+                        llm,
+                        prior_summary=conv_after.summary if conv_after else None,
+                        user_content=user_msg.content,
+                        assistant_content=assistant_msg.content,
+                    )
+                    set_summary(session, request.conversation_id, new_summary)
+                    session.commit()
+                except Exception:
+                    logger.exception("Summary refresh failed; keeping prior summary")
+
     logger.info(
         "POST /recommend complete recommendations=%d filters_relaxed=%s",
         len(response.recommendations),

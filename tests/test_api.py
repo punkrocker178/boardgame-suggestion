@@ -16,6 +16,12 @@ from app.models import ExtractedFilters, GameRecommendation
 from app.recommender import SynthesisOutput
 
 
+def _conversation_id(client: TestClient) -> str:
+    response = client.post("/conversations", json={})
+    assert response.status_code == 201
+    return response.json()["id"]
+
+
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     chroma_dir = tmp_path / "chroma"
@@ -66,6 +72,23 @@ def client(tmp_path, monkeypatch):
     db_engine.get_session_factory.cache_clear()
 
 
+def test_create_conversation_returns_id(client: TestClient) -> None:
+    response = client.post("/conversations", json={"title": "x"})
+    assert response.status_code == 201
+    assert "id" in response.json()
+
+
+def test_recommend_unknown_conversation_returns_404(client: TestClient) -> None:
+    response = client.post(
+        "/recommend",
+        json={
+            "conversation_id": "00000000-0000-0000-0000-000000000099",
+            "query": "any",
+        },
+    )
+    assert response.status_code == 404
+
+
 def test_health_ok(client: TestClient) -> None:
     response = client.get("/health")
     assert response.status_code == 200
@@ -108,7 +131,10 @@ def test_recommend_response_shape(
 
     response = client.post(
         "/recommend",
-        json={"query": "light strategy game for 4 players under 60 minutes"},
+        json={
+            "conversation_id": _conversation_id(client),
+            "query": "light strategy game for 4 players under 60 minutes",
+        },
     )
     assert response.status_code == 200
     data = response.json()
@@ -116,6 +142,8 @@ def test_recommend_response_shape(
     assert "reasoning" in data
     assert "filters_applied" in data
     assert "filters_relaxed" in data
+    assert "conversation_id" in data
+    assert "standalone_query" in data
     assert data["filters_applied"]["player_count"] == 4
     assert data["recommendations"][0]["name"] == "Catan"
 
@@ -141,7 +169,13 @@ def test_recommend_filters_applied_includes_similar_to(
         ],
         reasoning="Neighbors of Catan.",
     )
-    response = client.post("/recommend", json={"query": "games like Catan"})
+    response = client.post(
+        "/recommend",
+        json={
+            "conversation_id": _conversation_id(client),
+            "query": "games like Catan",
+        },
+    )
     assert response.status_code == 200
     assert response.json()["filters_applied"]["similar_to"] == "Catan"
 
@@ -156,7 +190,13 @@ def test_recommend_no_games_indexed_returns_503(
     app_state.indexing_ok = False
     app_state.indexed_games = 0
 
-    response = client.post("/recommend", json={"query": "any game"})
+    response = client.post(
+        "/recommend",
+        json={
+            "conversation_id": _conversation_id(client),
+            "query": "any game",
+        },
+    )
     assert response.status_code == 503
     assert response.json()["error"] == "No games indexed"
 
@@ -186,7 +226,13 @@ def test_recommend_text_path_does_not_call_llm_extract(
         ],
         reasoning="ok",
     )
-    response = client.post("/recommend", json={"query": "for 4 players"})
+    response = client.post(
+        "/recommend",
+        json={
+            "conversation_id": _conversation_id(client),
+            "query": "for 4 players",
+        },
+    )
     assert response.status_code == 200
     assert response.json()["filters_applied"]["player_count"] == 4
     mock_extract.assert_not_called()
@@ -201,7 +247,13 @@ def test_recommend_missing_llm_returns_502_after_extraction(
     previous = app_state.llm
     app_state.llm = None
     try:
-        response = client.post("/recommend", json={"query": "for 4 players"})
+        response = client.post(
+        "/recommend",
+        json={
+            "conversation_id": _conversation_id(client),
+            "query": "for 4 players",
+        },
+    )
         assert response.status_code == 502
         assert response.json()["error"] == "LLM unavailable"
         mock_resolve.assert_called_once()
@@ -270,3 +322,110 @@ def test_chain_cancel_on_signals_sets_event_and_calls_previous() -> None:
     finally:
         restore()
         signal.signal(signal.SIGINT, old)
+
+
+@patch("app.main.synthesize_recommendations")
+@patch("app.main.resolve_filters")
+@patch("app.contextualizer.invoke_structured")
+def test_recommend_first_turn_skips_contextualizer_llm(
+    mock_invoke: MagicMock,
+    mock_resolve: MagicMock,
+    mock_synthesize: MagicMock,
+    client: TestClient,
+) -> None:
+    mock_resolve.return_value = ExtractedFilters(player_count=4)
+    mock_synthesize.return_value = SynthesisOutput(
+        recommendations=[
+            GameRecommendation(
+                name="Catan",
+                reason="Fits.",
+                min_players=3,
+                max_players=4,
+                play_time_minutes=90,
+                categories=["strategy"],
+            )
+        ],
+        reasoning="ok",
+    )
+    cid = _conversation_id(client)
+    response = client.post(
+        "/recommend",
+        json={"conversation_id": cid, "query": "games for 4 players"},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["conversation_id"] == cid
+    assert data["standalone_query"] == "games for 4 players"
+    mock_invoke.assert_not_called()
+    mock_resolve.assert_called_once()
+    assert mock_resolve.call_args.args[1] == "games for 4 players"
+
+
+@patch("app.main.synthesize_recommendations")
+@patch("app.main.resolve_filters")
+def test_recommend_follow_up_uses_standalone_query(
+    mock_resolve: MagicMock,
+    mock_synthesize: MagicMock,
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    mock_resolve.return_value = ExtractedFilters(player_count=4)
+    mock_synthesize.return_value = SynthesisOutput(
+        recommendations=[
+            GameRecommendation(
+                name="Catan",
+                reason="ok",
+                min_players=3,
+                max_players=4,
+                play_time_minutes=90,
+                categories=["strategy"],
+            )
+        ],
+        reasoning="ok",
+    )
+    cid = _conversation_id(client)
+    client.post("/recommend", json={"conversation_id": cid, "query": "games for 4 players"})
+
+    def fake_contextualize(llm, *, query, summary, recent_messages):
+        assert recent_messages
+        return "light complexity games for 4 players"
+
+    monkeypatch.setattr("app.main.contextualize_query", fake_contextualize)
+    response = client.post(
+        "/recommend",
+        json={"conversation_id": cid, "query": "something lighter"},
+    )
+    assert response.status_code == 200
+    assert response.json()["standalone_query"] == "light complexity games for 4 players"
+    assert mock_resolve.call_args.args[1] == "light complexity games for 4 players"
+
+
+@patch("app.main.synthesize_recommendations")
+@patch("app.main.resolve_filters")
+@patch("app.main.summarize_dropped_turn", return_value="User likes 4-player games.")
+def test_recommend_refreshes_summary_when_window_exceeded(
+    mock_summarize: MagicMock,
+    mock_resolve: MagicMock,
+    mock_synthesize: MagicMock,
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    mock_resolve.return_value = ExtractedFilters()
+    mock_synthesize.return_value = SynthesisOutput(
+        recommendations=[
+            GameRecommendation(
+                name="Catan",
+                reason="ok",
+                min_players=3,
+                max_players=4,
+                play_time_minutes=90,
+                categories=["strategy"],
+            )
+        ],
+        reasoning="ok",
+    )
+    monkeypatch.setattr("app.main.contextualize_query", lambda *a, **k: k["query"])
+    cid = _conversation_id(client)
+    for i in range(6):
+        client.post("/recommend", json={"conversation_id": cid, "query": f"q{i}"})
+    assert mock_summarize.called
