@@ -5,8 +5,8 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
 
-from app.llm_parsing import invoke_structured
-from app.models import ExtractedFilters, FiltersApplied, GameRecommendation
+from app.api.models import ExtractedFilters, FiltersApplied, GameRecommendation
+from app.helpers.llm_parsing import invoke_structured
 
 logger = logging.getLogger(__name__)
 

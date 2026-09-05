@@ -2,7 +2,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.models import Category
-from app.models import ExtractedFilters
+from app.api.models import ExtractedFilters
 
 
 def _slug_key(name: str) -> str:

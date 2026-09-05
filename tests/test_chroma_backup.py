@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from app.ingest import WATERMARK_FILENAME
+from app.services.ingest import WATERMARK_FILENAME
 from scripts.backup_chroma import ChromaArchiveError, backup_chroma, tarball_path
 from scripts.restore_chroma import restore_chroma
 

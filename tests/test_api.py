@@ -11,9 +11,10 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.db.models import Base, Category, CrawlStatus, Game, GameCategory
-from app.main import app, app_state
-from app.models import ExtractedFilters, GameRecommendation
-from app.recommender import SynthesisOutput
+from app.api.models import ExtractedFilters, GameRecommendation
+from app.main import app
+from app.services.recommender import SynthesisOutput
+from app.state import app_state
 
 
 def _conversation_id(client: TestClient) -> str:
@@ -62,10 +63,13 @@ def client(tmp_path, monkeypatch):
     db_engine.get_engine.cache_clear()
     db_engine.get_session_factory.cache_clear()
 
-    with patch("app.main.get_session_factory", return_value=factory):
-        with patch("app.main.get_embeddings", return_value=FakeEmbeddings(size=8)):
-            with TestClient(app) as test_client:
-                yield test_client
+    with patch("app.main.get_session_factory", return_value=factory), patch(
+        "app.api.routes.get_session_factory", return_value=factory
+    ), patch("app.main.get_embeddings", return_value=FakeEmbeddings(size=8)), patch(
+        "app.api.routes.get_embeddings", return_value=FakeEmbeddings(size=8)
+    ):
+        with TestClient(app) as test_client:
+            yield test_client
 
     get_settings.cache_clear()
     db_engine.get_engine.cache_clear()
@@ -102,8 +106,8 @@ def test_recommend_empty_query_returns_422(client: TestClient) -> None:
     assert response.status_code == 422
 
 
-@patch("app.main.synthesize_recommendations")
-@patch("app.main.resolve_filters")
+@patch("app.api.routes.synthesize_recommendations")
+@patch("app.api.routes.resolve_filters")
 def test_recommend_response_shape(
     mock_resolve: MagicMock,
     mock_synthesize: MagicMock,
@@ -148,8 +152,8 @@ def test_recommend_response_shape(
     assert data["recommendations"][0]["name"] == "Catan"
 
 
-@patch("app.main.synthesize_recommendations")
-@patch("app.main.resolve_filters")
+@patch("app.api.routes.synthesize_recommendations")
+@patch("app.api.routes.resolve_filters")
 def test_recommend_filters_applied_includes_similar_to(
     mock_resolve: MagicMock,
     mock_synthesize: MagicMock,
@@ -180,8 +184,8 @@ def test_recommend_filters_applied_includes_similar_to(
     assert response.json()["filters_applied"]["similar_to"] == "Catan"
 
 
-@patch("app.main.synthesize_recommendations")
-@patch("app.main.resolve_filters")
+@patch("app.api.routes.synthesize_recommendations")
+@patch("app.api.routes.resolve_filters")
 def test_recommend_no_games_indexed_returns_503(
     mock_resolve: MagicMock,
     mock_synthesize: MagicMock,
@@ -205,8 +209,8 @@ def test_recommend_no_games_indexed_returns_503(
     app_state.index_stale = False
 
 
-@patch("app.main.synthesize_recommendations")
-@patch("app.query_extractor.extract_filters")
+@patch("app.api.routes.synthesize_recommendations")
+@patch("app.helpers.query_extractor.extract_filters")
 def test_recommend_text_path_does_not_call_llm_extract(
     mock_extract: MagicMock,
     mock_synthesize: MagicMock,
@@ -238,7 +242,7 @@ def test_recommend_text_path_does_not_call_llm_extract(
     mock_extract.assert_not_called()
 
 
-@patch("app.main.resolve_filters")
+@patch("app.api.routes.resolve_filters")
 def test_recommend_missing_llm_returns_502_after_extraction(
     mock_resolve: MagicMock,
     client: TestClient,
@@ -275,7 +279,7 @@ def test_health_degraded_when_index_stale(client: TestClient) -> None:
 def test_run_indexing_marks_stale(tmp_path, monkeypatch) -> None:
     from contextlib import contextmanager
 
-    from app.ingest import IngestResult
+    from app.services.ingest import IngestResult
     from app.main import _run_indexing
 
     monkeypatch.setenv("CHROMA_PERSIST_DIR", str(tmp_path / "chroma"))
@@ -324,9 +328,9 @@ def test_chain_cancel_on_signals_sets_event_and_calls_previous() -> None:
         signal.signal(signal.SIGINT, old)
 
 
-@patch("app.main.synthesize_recommendations")
-@patch("app.main.resolve_filters")
-@patch("app.contextualizer.invoke_structured")
+@patch("app.api.routes.synthesize_recommendations")
+@patch("app.api.routes.resolve_filters")
+@patch("app.services.contextualizer.invoke_structured")
 def test_recommend_first_turn_skips_contextualizer_llm(
     mock_invoke: MagicMock,
     mock_resolve: MagicMock,
@@ -361,8 +365,8 @@ def test_recommend_first_turn_skips_contextualizer_llm(
     assert mock_resolve.call_args.args[1] == "games for 4 players"
 
 
-@patch("app.main.synthesize_recommendations")
-@patch("app.main.resolve_filters")
+@patch("app.api.routes.synthesize_recommendations")
+@patch("app.api.routes.resolve_filters")
 def test_recommend_follow_up_uses_standalone_query(
     mock_resolve: MagicMock,
     mock_synthesize: MagicMock,
@@ -390,7 +394,7 @@ def test_recommend_follow_up_uses_standalone_query(
         assert recent_messages
         return "light complexity games for 4 players"
 
-    monkeypatch.setattr("app.main.contextualize_query", fake_contextualize)
+    monkeypatch.setattr("app.api.routes.contextualize_query", fake_contextualize)
     response = client.post(
         "/recommend",
         json={"conversation_id": cid, "query": "something lighter"},
@@ -400,9 +404,9 @@ def test_recommend_follow_up_uses_standalone_query(
     assert mock_resolve.call_args.args[1] == "light complexity games for 4 players"
 
 
-@patch("app.main.synthesize_recommendations")
-@patch("app.main.resolve_filters")
-@patch("app.main.summarize_dropped_turn", return_value="User likes 4-player games.")
+@patch("app.api.routes.synthesize_recommendations")
+@patch("app.api.routes.resolve_filters")
+@patch("app.api.routes.summarize_dropped_turn", return_value="User likes 4-player games.")
 def test_recommend_refreshes_summary_when_window_exceeded(
     mock_summarize: MagicMock,
     mock_resolve: MagicMock,
@@ -424,7 +428,7 @@ def test_recommend_refreshes_summary_when_window_exceeded(
         ],
         reasoning="ok",
     )
-    monkeypatch.setattr("app.main.contextualize_query", lambda *a, **k: k["query"])
+    monkeypatch.setattr("app.api.routes.contextualize_query", lambda *a, **k: k["query"])
     cid = _conversation_id(client)
     for i in range(6):
         client.post("/recommend", json={"conversation_id": cid, "query": f"q{i}"})

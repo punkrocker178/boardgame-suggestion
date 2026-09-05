@@ -4,10 +4,10 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.prompts import ChatPromptTemplate
 from openai import APIConnectionError, APIStatusError
 
-from app.llm_parsing import invoke_structured
-from app.models import ExtractedFilters
-from app.sql_filters import has_active_hard_filters
-from app.text_extractor import extract_filters_from_text, sanitize_gibberish, sentence_count
+from app.api.models import ExtractedFilters
+from app.helpers.llm_parsing import invoke_structured
+from app.helpers.sql_filters import has_active_hard_filters
+from app.helpers.text_extractor import extract_filters_from_text, sanitize_gibberish, sentence_count
 
 logger = logging.getLogger(__name__)
 

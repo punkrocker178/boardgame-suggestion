@@ -8,7 +8,7 @@ from sqlalchemy.pool import StaticPool
 from unittest.mock import patch
 
 from app.db.models import Base, Category, CrawlStatus, Game, GameCategory
-from app.models import (
+from app.api.models import (
     AutocompleteGame,
     AutocompleteResponse,
     SearchGame,
@@ -62,14 +62,14 @@ def test_autocomplete_response_shape():
 
 
 def test_cursor_roundtrip():
-    from app.search import decode_cursor, encode_cursor
+    from app.services.search import decode_cursor, encode_cursor
 
     data = {"rank": 5, "id": 42}
     assert decode_cursor(encode_cursor(data)) == data
 
 
 def test_cursor_invalid_raises():
-    from app.search import decode_cursor
+    from app.services.search import decode_cursor
 
     with pytest.raises(ValueError):
         decode_cursor("not-valid-base64!!!")
@@ -78,7 +78,7 @@ def test_cursor_invalid_raises():
 def test_cursor_tampered_raises():
     import base64
 
-    from app.search import decode_cursor
+    from app.services.search import decode_cursor
 
     bad = base64.urlsafe_b64encode(b"not json").decode()
     with pytest.raises(ValueError):
@@ -147,7 +147,7 @@ def search_session():
 
 
 def test_search_browse_no_filters(search_session):
-    from app.search import search_games
+    from app.services.search import search_games
 
     with search_session() as session:
         resp = search_games(session, SearchRequest(limit=10))
@@ -157,7 +157,7 @@ def test_search_browse_no_filters(search_session):
 
 
 def test_search_browse_pagination(search_session):
-    from app.search import search_games
+    from app.services.search import search_games
 
     with search_session() as session:
         page1 = search_games(session, SearchRequest(limit=2))
@@ -174,7 +174,7 @@ def test_search_browse_pagination(search_session):
 
 
 def test_search_with_q(search_session):
-    from app.search import search_games
+    from app.services.search import search_games
 
     with search_session() as session:
         resp = search_games(session, SearchRequest(q="Catan"))
@@ -182,7 +182,7 @@ def test_search_with_q(search_session):
 
 
 def test_search_filter_player_count(search_session):
-    from app.search import search_games
+    from app.services.search import search_games
 
     with search_session() as session:
         resp = search_games(session, SearchRequest(player_count=3))
@@ -210,7 +210,7 @@ def test_search_includes_expansions(search_session):
             )
         )
         session.commit()
-    from app.search import search_games
+    from app.services.search import search_games
 
     with factory() as session:
         resp = search_games(session, SearchRequest(limit=50))
@@ -218,7 +218,7 @@ def test_search_includes_expansions(search_session):
 
 
 def test_search_bad_cursor_returns_value_error(search_session):
-    from app.search import search_games
+    from app.services.search import search_games
 
     with pytest.raises(ValueError):
         with search_session() as session:
@@ -226,7 +226,7 @@ def test_search_bad_cursor_returns_value_error(search_session):
 
 
 def test_autocomplete_prefix_before_substring(search_session):
-    from app.search import autocomplete_games
+    from app.services.search import autocomplete_games
 
     with search_session() as session:
         resp = autocomplete_games(session, "Cat", 10)
@@ -236,7 +236,7 @@ def test_autocomplete_prefix_before_substring(search_session):
 
 
 def test_autocomplete_substring_match(search_session):
-    from app.search import autocomplete_games
+    from app.services.search import autocomplete_games
 
     with search_session() as session:
         resp = autocomplete_games(session, "ata", 10)
@@ -244,7 +244,7 @@ def test_autocomplete_substring_match(search_session):
 
 
 def test_autocomplete_limit(search_session):
-    from app.search import autocomplete_games
+    from app.services.search import autocomplete_games
 
     with search_session() as session:
         resp = autocomplete_games(session, "a", 2)
@@ -252,7 +252,7 @@ def test_autocomplete_limit(search_session):
 
 
 def test_autocomplete_fills_substring_after_prefix(search_session):
-    from app.search import autocomplete_games
+    from app.services.search import autocomplete_games
 
     with search_session() as session:
         resp = autocomplete_games(session, "a", 2)
@@ -316,10 +316,13 @@ def search_client(tmp_path, monkeypatch):
     db_engine.get_engine.cache_clear()
     db_engine.get_session_factory.cache_clear()
 
-    with patch("app.main.get_session_factory", return_value=factory):
-        with patch("app.main.get_embeddings", return_value=FakeEmbeddings(size=8)):
-            with TestClient(app) as c:
-                yield c
+    with patch("app.main.get_session_factory", return_value=factory), patch(
+        "app.api.routes.get_session_factory", return_value=factory
+    ), patch("app.main.get_embeddings", return_value=FakeEmbeddings(size=8)), patch(
+        "app.api.routes.get_embeddings", return_value=FakeEmbeddings(size=8)
+    ):
+        with TestClient(app) as c:
+            yield c
 
     get_settings.cache_clear()
     db_engine.get_engine.cache_clear()
@@ -377,7 +380,7 @@ def test_get_autocomplete_limit(search_client):
 
 
 def test_search_works_without_chroma(search_client):
-    from app.main import app_state
+    from app.state import app_state
 
     old_ok = app_state.indexing_ok
     old_count = app_state.indexed_games

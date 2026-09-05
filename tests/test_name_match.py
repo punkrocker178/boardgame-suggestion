@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 from sqlalchemy.orm import Session
 
 from app.db.models import Category, CrawlStatus, Game, GameCategory
-from app.name_match import lookup_indexed_game_by_name
+from app.helpers.name_match import lookup_indexed_game_by_name
 
 
 def _eligible(

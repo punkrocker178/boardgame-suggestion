@@ -9,7 +9,7 @@ from langchain_core.embeddings import FakeEmbeddings
 from sqlalchemy.orm import Session
 
 from app.db.models import Category, CrawlStatus, Game, GameCategory, GameMechanic, Mechanic
-from app.ingest import (
+from app.services.ingest import (
     IngestCancelled,
     IngestError,
     _swap_staging_to_live,
@@ -298,7 +298,7 @@ def test_ingest_delays_between_embed_batches(
     _seed_eligible(db_session)
     _seed_second_eligible(db_session)
     slept: list[float] = []
-    monkeypatch.setattr("app.ingest.time.sleep", slept.append)
+    monkeypatch.setattr("app.services.ingest.time.sleep", slept.append)
     ingest_games(
         db_session,
         tmp_path / "chroma",
@@ -400,7 +400,7 @@ def test_swap_succeeds_when_leftover_old_cannot_be_deleted(
             raise PermissionError(13, "Permission denied", str(target))
         real_rmtree(path, *args, **kwargs)
 
-    monkeypatch.setattr("app.ingest.shutil.rmtree", rmtree)
+    monkeypatch.setattr("app.services.ingest.shutil.rmtree", rmtree)
 
     _swap_staging_to_live(staging, live)
 
@@ -424,7 +424,7 @@ def test_swap_succeeds_when_post_swap_rmtree_fails(
     def boom(path, *args, **kwargs):
         raise PermissionError(13, "Permission denied", str(path))
 
-    monkeypatch.setattr("app.ingest.shutil.rmtree", boom)
+    monkeypatch.setattr("app.services.ingest.shutil.rmtree", boom)
 
     _swap_staging_to_live(staging, live)
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-from app.models import ExtractedFilters
+from app.api.models import ExtractedFilters
 
 _SENTENCE_SPLIT = re.compile(r"[.?!]+")
 _LETTER_TOKEN = re.compile(r"[A-Za-z]+")

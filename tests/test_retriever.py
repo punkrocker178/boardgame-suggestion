@@ -7,9 +7,9 @@ from langchain_core.embeddings import FakeEmbeddings
 from sqlalchemy.orm import Session
 
 from app.db.models import Category, CrawlStatus, Game, GameCategory
-from app.ingest import COLLECTION_NAME, _document_text, _game_to_row, rows_to_documents
-from app.models import ExtractedFilters
-from app.retriever import resolve_seed_query, retrieve_games
+from app.services.ingest import COLLECTION_NAME, _document_text, _game_to_row, rows_to_documents
+from app.api.models import ExtractedFilters
+from app.services.retriever import resolve_seed_query, retrieve_games
 
 
 def _seed_db(session: Session) -> None:

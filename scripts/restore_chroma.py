@@ -16,7 +16,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from app.config import get_settings
-from app.ingest import WATERMARK_FILENAME
+from app.services.ingest import WATERMARK_FILENAME
 from app.logging_config import configure_logging
 from scripts.backup_chroma import ARCHIVE_ROOT, ChromaArchiveError, tarball_path
 

@@ -7,8 +7,8 @@ from sqlalchemy import Select, and_, or_, select
 from sqlalchemy.orm import Session
 
 from app.db.models import Category, Game, GameCategory
-from app.ingest import _eligible_games_filters
-from app.models import ExtractedFilters
+from app.api.models import ExtractedFilters
+from app.services.ingest import _eligible_games_filters
 
 # Cap SQL → Chroma allowlist size (ranked games first) for faster vector search.
 CANDIDATE_ID_LIMIT = 1000

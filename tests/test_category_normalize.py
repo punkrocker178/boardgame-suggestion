@@ -1,6 +1,6 @@
-from app.category_normalize import normalize_categories
+from app.helpers.category_normalize import normalize_categories
 from app.db.models import Category
-from app.models import ExtractedFilters
+from app.api.models import ExtractedFilters
 
 
 def test_normalize_case_and_slug(db_session) -> None:
@@ -25,7 +25,7 @@ def test_normalize_empty_and_none(db_session) -> None:
 
 
 def test_apply_category_normalization_merges_keywords(db_session) -> None:
-    from app.category_normalize import apply_category_normalization
+    from app.helpers.category_normalize import apply_category_normalization
 
     db_session.add(Category(id=1, name="Party"))
     db_session.commit()
@@ -40,7 +40,7 @@ def test_apply_category_normalization_merges_keywords(db_session) -> None:
 
 
 def test_apply_category_normalization_clears_when_none_resolve(db_session) -> None:
-    from app.category_normalize import apply_category_normalization
+    from app.helpers.category_normalize import apply_category_normalization
 
     db_session.add(Category(id=1, name="Strategy"))
     db_session.commit()
