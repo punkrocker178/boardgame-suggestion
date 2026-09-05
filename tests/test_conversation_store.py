@@ -12,6 +12,7 @@ from app.conversation_store import (
     create_conversation,
     get_conversation,
     load_recent_messages,
+    load_turn_pair_at_index,
     set_summary,
 )
 from app.db.models import Base, Conversation, Message
@@ -77,6 +78,29 @@ def test_append_and_load_recent_window() -> None:
         assert len(recent) == RECENT_TURN_LIMIT * 2
         assert recent[0].content == "q1"
         assert recent[-1].content == f"a{RECENT_TURN_LIMIT}"
+
+
+def test_load_turn_pair_at_index() -> None:
+    with _session() as session:
+        conv = create_conversation(session)
+        session.commit()
+        for i in range(3):
+            append_turn(
+                session,
+                conv.id,
+                user_content=f"q{i}",
+                standalone_query=f"sq{i}",
+                assistant_content=f"a{i}",
+                assistant_payload={"reasoning": f"a{i}"},
+            )
+        session.commit()
+        pair = load_turn_pair_at_index(session, conv.id, 1)
+        assert pair is not None
+        user, assistant = pair
+        assert user.content == "q1"
+        assert assistant.content == "a1"
+        assert load_turn_pair_at_index(session, conv.id, -1) is None
+        assert load_turn_pair_at_index(session, conv.id, 3) is None
 
 
 def test_set_summary() -> None:

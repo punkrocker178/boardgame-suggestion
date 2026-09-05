@@ -104,16 +104,17 @@ def load_turn_pair_at_index(
     session: Session, conversation_id: UUID, turn_index: int
 ) -> tuple[Message, Message] | None:
     """0-based turn index among user messages ordered by created_at."""
-    users = list(
-        session.scalars(
-            select(Message)
-            .where(Message.conversation_id == conversation_id, Message.role == "user")
-            .order_by(Message.created_at.asc())
-        )
-    )
-    if turn_index < 0 or turn_index >= len(users):
+    if turn_index < 0:
         return None
-    user = users[turn_index]
+    user = session.scalars(
+        select(Message)
+        .where(Message.conversation_id == conversation_id, Message.role == "user")
+        .order_by(Message.created_at.asc())
+        .offset(turn_index)
+        .limit(1)
+    ).first()
+    if user is None:
+        return None
     assistant = session.scalars(
         select(Message)
         .where(
