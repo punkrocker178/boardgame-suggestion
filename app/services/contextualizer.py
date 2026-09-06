@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import re
+from dataclasses import dataclass
+
 from langchain_core.language_models import BaseChatModel
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
@@ -7,8 +10,53 @@ from pydantic import BaseModel, Field
 from app.db.models import Message
 from app.helpers.llm_parsing import invoke_structured
 
+_CUE_PHRASES = (
+    "what about",
+    "how about",
+    "same but",
+    "same as",
+    "but with",
+    "but for",
+    "except",
+    "without the",
+    "instead of",
+    "lighter",
+    "heavier",
+    "shorter",
+    "longer",
+    "simpler",
+    "cheaper",
+    "more",
+    "less",
+    "another",
+    "other",
+    "similar",
+    "quicker",
+    "easier",
+    "harder",
+    "faster",
+    "slower",
+    "bigger",
+    "smaller",
+)
+_CUE_WORDS = re.compile(
+    r"\b(?:those ones|it|that|those|them|also|they)\b",
+    re.IGNORECASE,
+)
+
+
+@dataclass(frozen=True)
+class QueryPlan:
+    standalone_query: str
+    topic_changed: bool
+
 
 class StandaloneQuery(BaseModel):
+    standalone_query: str = Field(min_length=1)
+
+
+class TopicSwitchOutput(BaseModel):
+    topic_changed: bool
     standalone_query: str = Field(min_length=1)
 
 
@@ -35,6 +83,26 @@ CONTEXTUALIZE_PROMPT = ChatPromptTemplate.from_messages(
     ]
 )
 
+PLAN_PROMPT = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            "You plan a board-game recommendation follow-up.\n"
+            "Rules:\n"
+            "1. Set topic_changed true when the current message is a new recommendation request that must "
+            "not keep prior players, time, complexity/weight, similar-to, or categories.\n"
+            "2. Otherwise set topic_changed false and rewrite into one standalone search prompt. Preserve "
+            "earlier constraints unless the follow-up clearly replaces them.\n"
+            "3. Do not invent game names or filters absent from the conversation.\n"
+            "4. Return JSON only with topic_changed and standalone_query.",
+        ),
+        (
+            "human",
+            "Summary:\n{summary}\n\nRecent messages:\n{recent_messages}\n\nCurrent user message:\n{query}",
+        ),
+    ]
+)
+
 SUMMARY_PROMPT = ChatPromptTemplate.from_messages(
     [
         (
@@ -50,6 +118,13 @@ SUMMARY_PROMPT = ChatPromptTemplate.from_messages(
 )
 
 
+def has_followup_cue(query: str) -> bool:
+    lowered = query.lower()
+    if any(phrase in lowered for phrase in _CUE_PHRASES):
+        return True
+    return _CUE_WORDS.search(query) is not None
+
+
 def _format_recent(messages: list[Message]) -> str:
     lines: list[str] = []
     for m in messages:
@@ -63,20 +138,21 @@ def contextualize_query(
     query: str,
     summary: str | None,
     recent_messages: list[Message],
-) -> str:
+) -> QueryPlan:
     if not recent_messages:
-        return query
-    result = invoke_structured(
-        llm,
-        CONTEXTUALIZE_PROMPT,
-        StandaloneQuery,
-        {
-            "summary": summary or "(none)",
-            "recent_messages": _format_recent(recent_messages),
-            "query": query,
-        },
-    )
-    return result.standalone_query.strip()
+        return QueryPlan(standalone_query=query, topic_changed=False)
+    variables = {
+        "summary": summary or "(none)",
+        "recent_messages": _format_recent(recent_messages),
+        "query": query,
+    }
+    if has_followup_cue(query):
+        result = invoke_structured(llm, CONTEXTUALIZE_PROMPT, StandaloneQuery, variables)
+        return QueryPlan(standalone_query=result.standalone_query.strip(), topic_changed=False)
+    result = invoke_structured(llm, PLAN_PROMPT, TopicSwitchOutput, variables)
+    if result.topic_changed:
+        return QueryPlan(standalone_query=query, topic_changed=True)
+    return QueryPlan(standalone_query=result.standalone_query.strip(), topic_changed=False)
 
 
 def summarize_dropped_turn(
