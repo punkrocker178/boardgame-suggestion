@@ -100,22 +100,23 @@ Empty `recent_messages`: return `QueryPlan(standalone_query=query, topic_changed
 
 Run on the **current** user `query` only (not history). Case-insensitive.
 
-Any one hit → cue path (rewrite LLM, `topic_changed` false):
+Any one hit → cue path (rewrite LLM, `topic_changed` false). All cues are **word-bounded** (`\b…\b`), including multi-word phrases, so `more` does not match `moreover` and `less` does not match game titles like `Endless Legend`.
 
-**Phrases (substring):**
+**Phrases:**
 
 - `what about`, `how about`, `same but`, `same as`, `but with`, `but for`
 - `except`, `without the`, `instead of` (phrase only; lone `instead` is not a cue)
+- `those ones`
 
-**Comparatives (substring):**
+**Comparatives:**
 
 - `lighter`, `heavier`, `shorter`, `longer`, `simpler`, `cheaper`
 - `more`, `less`, `another`, `other`, `similar`
 - `quicker`, `easier`, `harder`, `faster`, `slower`, `bigger`, `smaller`
 
-**Word-boundary tokens:**
+**Pronouns / particles:**
 
-- `it`, `that`, `those`, `them`, `also`, `they`, `those ones`
+- `it`, `that`, `those`, `them`, `also`, `they`
 
 **Not cues:** lone `this`, lone `instead` (too many new-topic false positives, e.g. `this weekend war games`).
 
@@ -188,7 +189,7 @@ Pytest, SQLite, mocked LLM, existing FastAPI style:
 3. No cue + mock `topic_changed=false`: `standalone_query` from the model is used; epoch unchanged.
 4. First turn (empty epoch): contextualizer LLM not called; `topic_changed` false.
 5. After a switch, six new-topic turns: summarizer invoked; dropped pair is from the **new** epoch only.
-6. Cue helper: `also` and `instead of` match; `this weekend war games` and lone `instead` do not; `more players` matches.
+6. Cue helper: `also` and `instead of` match; `this weekend war games`, lone `instead`, `moreover`, and `Endless Legend` do not; `more players` matches.
 
 Success criterion: prior “party games for 8” then “2-player war games” (no cue) with mocked `topic_changed=true` does not pass “8” / “party” into retrieve/synthesize.
 
