@@ -189,7 +189,7 @@ Pytest, SQLite, mocked LLM, existing FastAPI style:
 3. No cue + mock `topic_changed=false`: `standalone_query` from the model is used; epoch unchanged.
 4. First turn (empty epoch): contextualizer LLM not called; `topic_changed` false.
 5. After a switch, six new-topic turns: summarizer invoked; dropped pair is from the **new** epoch only.
-6. Cue helper: `also` and `instead of` match; `this weekend war games` and lone `instead` do not; `more players` matches.
+6. Cue helper: `also` and `instead of` match; `this weekend war games`, lone `instead`, `moreover`, and `Endless Legend` do not; `more players` matches.
 
 Success criterion: prior “party games for 8” then “2-player war games” (no cue) with mocked `topic_changed=true` does not pass “8” / “party” into retrieve/synthesize.
 
