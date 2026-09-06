@@ -201,4 +201,4 @@ Success criterion for rewrite quality: unit-test contextualizer I/O with a fixed
 ## Relationship to other docs
 
 - Guide: `docs/rag-improvement-guide.md` steps 1–3 (persist, load context, contextualizer). Step 4: `docs/superpowers/specs/2026-09-05-topic-switch-design.md`. Later guide steps are separate specs.
-- Nuxt chat design (`2026-08-21-nuxt-chat-frontend-design.md`) still assumes `{ query }` only and client-side `sessionStorage`; update that design in a later pass when the UI adopts `conversation_id`.
+- Nuxt chat design (`2026-08-21-nuxt-chat-frontend-design.md`) updated 2026-09-05 to adopt `conversation_id` and server-side turn memory.
