@@ -100,22 +100,23 @@ Empty `recent_messages`: return `QueryPlan(standalone_query=query, topic_changed
 
 Run on the **current** user `query` only (not history). Case-insensitive.
 
-Any one hit → cue path (rewrite LLM, `topic_changed` false):
+Any one hit → cue path (rewrite LLM, `topic_changed` false). All cues are **word-bounded** (`\b…\b`), including multi-word phrases, so `more` does not match `moreover` and `less` does not match game titles like `Endless Legend`.
 
-**Phrases (substring):**
+**Phrases:**
 
 - `what about`, `how about`, `same but`, `same as`, `but with`, `but for`
 - `except`, `without the`, `instead of` (phrase only; lone `instead` is not a cue)
+- `those ones`
 
-**Comparatives (substring):**
+**Comparatives:**
 
 - `lighter`, `heavier`, `shorter`, `longer`, `simpler`, `cheaper`
 - `more`, `less`, `another`, `other`, `similar`
 - `quicker`, `easier`, `harder`, `faster`, `slower`, `bigger`, `smaller`
 
-**Word-boundary tokens:**
+**Pronouns / particles:**
 
-- `it`, `that`, `those`, `them`, `also`, `they`, `those ones`
+- `it`, `that`, `those`, `them`, `also`, `they`
 
 **Not cues:** lone `this`, lone `instead` (too many new-topic false positives, e.g. `this weekend war games`).
 

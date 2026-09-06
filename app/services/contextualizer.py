@@ -10,16 +10,18 @@ from pydantic import BaseModel, Field
 from app.db.models import Message
 from app.helpers.llm_parsing import invoke_structured
 
-_CUE_PHRASES = (
+# Longer phrases first so alternation is obvious; all matches are word-bounded.
+_CUE_TOKENS = (
     "what about",
     "how about",
     "same but",
     "same as",
     "but with",
     "but for",
-    "except",
     "without the",
     "instead of",
+    "those ones",
+    "except",
     "lighter",
     "heavier",
     "shorter",
@@ -38,9 +40,15 @@ _CUE_PHRASES = (
     "slower",
     "bigger",
     "smaller",
+    "also",
+    "them",
+    "they",
+    "those",
+    "that",
+    "it",
 )
-_CUE_WORDS = re.compile(
-    r"\b(?:those ones|it|that|those|them|also|they)\b",
+_CUE_RE = re.compile(
+    r"\b(?:" + "|".join(re.escape(token) for token in _CUE_TOKENS) + r")\b",
     re.IGNORECASE,
 )
 
@@ -119,10 +127,7 @@ SUMMARY_PROMPT = ChatPromptTemplate.from_messages(
 
 
 def has_followup_cue(query: str) -> bool:
-    lowered = query.lower()
-    if any(phrase in lowered for phrase in _CUE_PHRASES):
-        return True
-    return _CUE_WORDS.search(query) is not None
+    return _CUE_RE.search(query) is not None
 
 
 def _format_recent(messages: list[Message]) -> str:

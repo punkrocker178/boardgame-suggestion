@@ -18,6 +18,10 @@ def test_has_followup_cue_matches_and_rejects() -> None:
     assert not has_followup_cue("this weekend war games")
     assert not has_followup_cue("war games instead")
     assert not has_followup_cue("2-player war games")
+    assert not has_followup_cue("moreover cooperative games")
+    assert not has_followup_cue("Endless Legend for 2")
+    assert not has_followup_cue("otherwise war games")
+    assert not has_followup_cue("similarly themed party games")
 
 
 def test_contextualize_skips_llm_without_history() -> None:
