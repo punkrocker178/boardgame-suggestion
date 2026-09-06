@@ -61,6 +61,13 @@ Needed for multi-turn `/recommend`:
 1. Apply `scripts/migrate_conversations.sql`.
 2. Fresh installs: updated `scripts/schema.sql` already creates the tables; skip this migrate script.
 
+### Topic epoch (existing DBs)
+
+Needed for topic-switch on `/recommend`:
+
+1. Apply `scripts/migrate_topic_started_at.sql`.
+2. Fresh installs: updated `scripts/schema.sql` already has `conversations.topic_started_at`; skip this migrate script.
+
 ## Import BGG dump
 
 Download a BGG ranks CSV (e.g. `boardgames_ranks.csv`), then:

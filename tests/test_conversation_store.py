@@ -56,6 +56,7 @@ def test_create_and_get_conversation() -> None:
         loaded = get_conversation(session, conv.id)
         assert loaded is not None
         assert loaded.title == "night"
+        assert loaded.topic_started_at is None
         assert get_conversation(session, UUID("00000000-0000-0000-0000-000000000001")) is None
 
 
@@ -110,3 +111,71 @@ def test_set_summary() -> None:
         set_summary(session, conv.id, "User wants 4-player games.")
         session.commit()
         assert get_conversation(session, conv.id).summary == "User wants 4-player games."
+
+
+def test_epoch_filters_recent_count_and_index() -> None:
+    with _session() as session:
+        conv = create_conversation(session)
+        session.commit()
+        for i in range(3):
+            append_turn(
+                session,
+                conv.id,
+                user_content=f"old{i}",
+                standalone_query=f"old{i}",
+                assistant_content=f"a{i}",
+                assistant_payload={"reasoning": f"a{i}"},
+            )
+        session.commit()
+        boundary = session.scalars(
+            select(Message)
+            .where(Message.conversation_id == conv.id, Message.role == "user")
+            .order_by(Message.created_at.desc())
+        ).first()
+        assert boundary is not None
+        epoch = boundary.created_at
+        assert count_turns(session, conv.id, topic_started_at=epoch) == 1
+        recent = load_recent_messages(session, conv.id, topic_started_at=epoch)
+        assert [m.content for m in recent if m.role == "user"] == ["old2"]
+        pair = load_turn_pair_at_index(session, conv.id, 0, topic_started_at=epoch)
+        assert pair is not None
+        assert pair[0].content == "old2"
+        assert load_turn_pair_at_index(session, conv.id, 1, topic_started_at=epoch) is None
+
+
+def test_append_turn_topic_changed_sets_epoch_and_clears_summary() -> None:
+    with _session() as session:
+        conv = create_conversation(session)
+        session.commit()
+        set_summary(session, conv.id, "Party games for 8.")
+        session.commit()
+        append_turn(
+            session,
+            conv.id,
+            user_content="party for 8",
+            standalone_query="party for 8",
+            assistant_content="ok",
+            assistant_payload={"reasoning": "ok"},
+        )
+        append_turn(
+            session,
+            conv.id,
+            user_content="2-player war games",
+            standalone_query="2-player war games",
+            assistant_content="ok",
+            assistant_payload={"reasoning": "ok"},
+            topic_changed=True,
+        )
+        session.commit()
+        loaded = get_conversation(session, conv.id)
+        assert loaded.summary is None
+        switch_user = session.scalars(
+            select(Message)
+            .where(Message.conversation_id == conv.id, Message.role == "user")
+            .order_by(Message.created_at.desc())
+        ).first()
+        assert loaded.topic_started_at == switch_user.created_at
+        recent = load_recent_messages(
+            session, conv.id, topic_started_at=loaded.topic_started_at
+        )
+        assert [m.content for m in recent if m.role == "user"] == ["2-player war games"]
