@@ -79,14 +79,17 @@ def recommend(request: RecommendRequest) -> RecommendResponse:
         conv = get_conversation(session, request.conversation_id)
         if conv is None:
             raise HTTPException(status_code=404, detail={"error": "Conversation not found"})
-        recent = load_recent_messages(session, request.conversation_id)
+        epoch = conv.topic_started_at
+        recent = load_recent_messages(
+            session, request.conversation_id, topic_started_at=epoch
+        )
         summary = conv.summary
 
     if recent and llm is None:
         raise HTTPException(status_code=502, detail={"error": "LLM unavailable"})
 
     try:
-        standalone_query = contextualize_query(
+        plan = contextualize_query(
             llm,
             query=request.query,
             summary=summary,
@@ -96,6 +99,7 @@ def recommend(request: RecommendRequest) -> RecommendResponse:
         logger.exception("Contextualizer failed")
         raise HTTPException(status_code=502, detail={"error": "LLM unavailable"}) from exc
 
+    standalone_query = plan.standalone_query
     filters = resolve_filters(llm, standalone_query)
 
     chroma_dir = Path(settings.chroma_persist_dir)
@@ -124,6 +128,7 @@ def recommend(request: RecommendRequest) -> RecommendResponse:
         filters_relaxed=filters_relaxed,
         conversation_id=request.conversation_id,
         standalone_query=standalone_query,
+        topic_changed=plan.topic_changed,
     )
 
     payload = {
@@ -132,6 +137,7 @@ def recommend(request: RecommendRequest) -> RecommendResponse:
         "filters_applied": applied.model_dump(),
         "filters_relaxed": filters_relaxed,
         "standalone_query": standalone_query,
+        "topic_changed": plan.topic_changed,
     }
 
     with session_factory() as session:
@@ -142,27 +148,36 @@ def recommend(request: RecommendRequest) -> RecommendResponse:
             standalone_query=standalone_query,
             assistant_content=response.reasoning,
             assistant_payload=payload,
+            topic_changed=plan.topic_changed,
         )
         session.commit()
 
-        turns = count_turns(session, request.conversation_id)
-        if turns > RECENT_TURN_LIMIT:
-            dropped_index = turns - RECENT_TURN_LIMIT - 1
-            pair = load_turn_pair_at_index(session, request.conversation_id, dropped_index)
-            if pair is not None:
-                user_msg, assistant_msg = pair
-                try:
-                    conv_after = get_conversation(session, request.conversation_id)
-                    new_summary = summarize_dropped_turn(
-                        llm,
-                        prior_summary=conv_after.summary if conv_after else None,
-                        user_content=user_msg.content,
-                        assistant_content=assistant_msg.content,
-                    )
-                    set_summary(session, request.conversation_id, new_summary)
-                    session.commit()
-                except Exception:
-                    logger.exception("Summary refresh failed; keeping prior summary")
+        if not plan.topic_changed:
+            turns = count_turns(
+                session, request.conversation_id, topic_started_at=epoch
+            )
+            if turns > RECENT_TURN_LIMIT:
+                dropped_index = turns - RECENT_TURN_LIMIT - 1
+                pair = load_turn_pair_at_index(
+                    session,
+                    request.conversation_id,
+                    dropped_index,
+                    topic_started_at=epoch,
+                )
+                if pair is not None:
+                    user_msg, assistant_msg = pair
+                    try:
+                        conv_after = get_conversation(session, request.conversation_id)
+                        new_summary = summarize_dropped_turn(
+                            llm,
+                            prior_summary=conv_after.summary if conv_after else None,
+                            user_content=user_msg.content,
+                            assistant_content=assistant_msg.content,
+                        )
+                        set_summary(session, request.conversation_id, new_summary)
+                        session.commit()
+                    except Exception:
+                        logger.exception("Summary refresh failed; keeping prior summary")
 
     logger.info(
         "POST /recommend complete recommendations=%d filters_relaxed=%s",
