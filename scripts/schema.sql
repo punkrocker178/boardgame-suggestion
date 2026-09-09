@@ -68,6 +68,7 @@ CREATE TABLE IF NOT EXISTS conversations (
     id UUID PRIMARY KEY,
     title VARCHAR(200),
     summary TEXT,
+    topic_started_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     version INT NOT NULL DEFAULT 1

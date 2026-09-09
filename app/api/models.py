@@ -50,6 +50,7 @@ class RecommendResponse(BaseModel):
     filters_relaxed: bool = False
     conversation_id: UUID
     standalone_query: str
+    topic_changed: bool = False
 
 
 class ExtractedFilters(BaseModel):

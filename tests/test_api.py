@@ -148,6 +148,7 @@ def test_recommend_response_shape(
     assert "filters_relaxed" in data
     assert "conversation_id" in data
     assert "standalone_query" in data
+    assert "topic_changed" in data
     assert data["filters_applied"]["player_count"] == 4
     assert data["recommendations"][0]["name"] == "Catan"
 
@@ -360,6 +361,7 @@ def test_recommend_first_turn_skips_contextualizer_llm(
     data = response.json()
     assert data["conversation_id"] == cid
     assert data["standalone_query"] == "games for 4 players"
+    assert data["topic_changed"] is False
     mock_invoke.assert_not_called()
     mock_resolve.assert_called_once()
     assert mock_resolve.call_args.args[1] == "games for 4 players"
@@ -390,9 +392,11 @@ def test_recommend_follow_up_uses_standalone_query(
     cid = _conversation_id(client)
     client.post("/recommend", json={"conversation_id": cid, "query": "games for 4 players"})
 
+    from app.services.contextualizer import QueryPlan
+
     def fake_contextualize(llm, *, query, summary, recent_messages):
         assert recent_messages
-        return "light complexity games for 4 players"
+        return QueryPlan("light complexity games for 4 players", False)
 
     monkeypatch.setattr("app.api.routes.contextualize_query", fake_contextualize)
     response = client.post(
@@ -401,6 +405,7 @@ def test_recommend_follow_up_uses_standalone_query(
     )
     assert response.status_code == 200
     assert response.json()["standalone_query"] == "light complexity games for 4 players"
+    assert response.json()["topic_changed"] is False
     assert mock_resolve.call_args.args[1] == "light complexity games for 4 players"
 
 
@@ -414,6 +419,8 @@ def test_recommend_refreshes_summary_when_window_exceeded(
     client: TestClient,
     monkeypatch,
 ) -> None:
+    from app.services.contextualizer import QueryPlan
+
     mock_resolve.return_value = ExtractedFilters()
     mock_synthesize.return_value = SynthesisOutput(
         recommendations=[
@@ -428,8 +435,213 @@ def test_recommend_refreshes_summary_when_window_exceeded(
         ],
         reasoning="ok",
     )
-    monkeypatch.setattr("app.api.routes.contextualize_query", lambda *a, **k: k["query"])
+    monkeypatch.setattr(
+        "app.api.routes.contextualize_query",
+        lambda *a, **k: QueryPlan(k["query"], False),
+    )
     cid = _conversation_id(client)
     for i in range(6):
         client.post("/recommend", json={"conversation_id": cid, "query": f"q{i}"})
     assert mock_summarize.called
+
+
+def _ok_synthesis() -> SynthesisOutput:
+    return SynthesisOutput(
+        recommendations=[
+            GameRecommendation(
+                name="Catan",
+                reason="ok",
+                min_players=3,
+                max_players=4,
+                play_time_minutes=90,
+                categories=["strategy"],
+            )
+        ],
+        reasoning="ok",
+    )
+
+
+@patch("app.api.routes.synthesize_recommendations")
+@patch("app.api.routes.resolve_filters")
+def test_recommend_cue_keeps_epoch(
+    mock_resolve: MagicMock,
+    mock_synthesize: MagicMock,
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    from uuid import UUID
+
+    from sqlalchemy import select
+
+    from app.api import routes
+    from app.db.models import Conversation, Message
+    from app.services.contextualizer import QueryPlan
+
+    mock_resolve.return_value = ExtractedFilters(player_count=4)
+    mock_synthesize.return_value = _ok_synthesis()
+    cid = _conversation_id(client)
+    client.post("/recommend", json={"conversation_id": cid, "query": "party games for 8"})
+
+    def fake_contextualize(llm, *, query, summary, recent_messages):
+        assert recent_messages
+        return QueryPlan("lighter party games for 8", False)
+
+    monkeypatch.setattr("app.api.routes.contextualize_query", fake_contextualize)
+    response = client.post(
+        "/recommend",
+        json={"conversation_id": cid, "query": "something lighter"},
+    )
+    assert response.status_code == 200
+    assert response.json()["topic_changed"] is False
+    factory = routes.get_session_factory()
+    with factory() as session:
+        conv = session.get(Conversation, UUID(cid))
+        assert conv.topic_started_at is None
+        users = list(
+            session.scalars(
+                select(Message).where(
+                    Message.conversation_id == UUID(cid), Message.role == "user"
+                )
+            )
+        )
+        assert len(users) == 2
+
+
+@patch("app.api.routes.synthesize_recommendations")
+@patch("app.api.routes.resolve_filters")
+def test_recommend_topic_switch_uses_raw_query_and_moves_epoch(
+    mock_resolve: MagicMock,
+    mock_synthesize: MagicMock,
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    from uuid import UUID
+
+    from sqlalchemy import select
+
+    from app.api import routes
+    from app.db.models import Conversation, Message
+    from app.services.contextualizer import QueryPlan
+
+    mock_resolve.return_value = ExtractedFilters()
+    mock_synthesize.return_value = _ok_synthesis()
+    cid = _conversation_id(client)
+    client.post(
+        "/recommend", json={"conversation_id": cid, "query": "party games for 8"}
+    )
+
+    def fake_contextualize(llm, *, query, summary, recent_messages):
+        return QueryPlan(query, True)
+
+    monkeypatch.setattr("app.api.routes.contextualize_query", fake_contextualize)
+    response = client.post(
+        "/recommend",
+        json={"conversation_id": cid, "query": "2-player war games"},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["topic_changed"] is True
+    assert data["standalone_query"] == "2-player war games"
+    assert mock_resolve.call_args.args[1] == "2-player war games"
+    assert mock_synthesize.call_args.args[1] == "2-player war games"
+    assert "8" not in mock_resolve.call_args.args[1]
+    assert "party" not in mock_resolve.call_args.args[1].lower()
+
+    factory = routes.get_session_factory()
+    with factory() as session:
+        conv = session.get(Conversation, UUID(cid))
+        assert conv.summary is None
+        switch_user = session.scalars(
+            select(Message)
+            .where(Message.conversation_id == UUID(cid), Message.role == "user")
+            .order_by(Message.created_at.desc())
+        ).first()
+        assert conv.topic_started_at == switch_user.created_at
+
+    seen: list[list[str]] = []
+
+    def record_recent(llm, *, query, summary, recent_messages):
+        seen.append([m.content for m in recent_messages])
+        return QueryPlan(query, False)
+
+    monkeypatch.setattr("app.api.routes.contextualize_query", record_recent)
+    client.post(
+        "/recommend",
+        json={"conversation_id": cid, "query": "something lighter"},
+    )
+    assert seen
+    assert "party games for 8" not in seen[0]
+
+
+@patch("app.api.routes.synthesize_recommendations")
+@patch("app.api.routes.resolve_filters")
+def test_recommend_no_cue_without_switch_keeps_epoch(
+    mock_resolve: MagicMock,
+    mock_synthesize: MagicMock,
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    from uuid import UUID
+
+    from app.api import routes
+    from app.db.models import Conversation
+    from app.services.contextualizer import QueryPlan
+
+    mock_resolve.return_value = ExtractedFilters()
+    mock_synthesize.return_value = _ok_synthesis()
+    cid = _conversation_id(client)
+    client.post("/recommend", json={"conversation_id": cid, "query": "games for 4"})
+
+    monkeypatch.setattr(
+        "app.api.routes.contextualize_query",
+        lambda *a, **k: QueryPlan("cooperative games for 4", False),
+    )
+    response = client.post(
+        "/recommend",
+        json={"conversation_id": cid, "query": "cooperative games"},
+    )
+    assert response.json()["standalone_query"] == "cooperative games for 4"
+    assert response.json()["topic_changed"] is False
+    factory = routes.get_session_factory()
+    with factory() as session:
+        conv = session.get(Conversation, UUID(cid))
+        assert conv.topic_started_at is None
+
+
+@patch("app.api.routes.synthesize_recommendations")
+@patch("app.api.routes.resolve_filters")
+@patch("app.api.routes.summarize_dropped_turn", return_value="New topic summary.")
+def test_recommend_summary_after_switch_drops_new_epoch_only(
+    mock_summarize: MagicMock,
+    mock_resolve: MagicMock,
+    mock_synthesize: MagicMock,
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    from app.services.contextualizer import QueryPlan
+
+    mock_resolve.return_value = ExtractedFilters()
+    mock_synthesize.return_value = _ok_synthesis()
+    cid = _conversation_id(client)
+    client.post("/recommend", json={"conversation_id": cid, "query": "party games for 8"})
+
+    plans = iter(
+        [QueryPlan("2-player war games", True)]
+        + [QueryPlan(f"new{i}", False) for i in range(6)]
+    )
+
+    def fake_contextualize(llm, *, query, summary, recent_messages):
+        return next(plans)
+
+    monkeypatch.setattr("app.api.routes.contextualize_query", fake_contextualize)
+    client.post(
+        "/recommend", json={"conversation_id": cid, "query": "2-player war games"}
+    )
+    mock_summarize.reset_mock()
+    for i in range(6):
+        client.post("/recommend", json={"conversation_id": cid, "query": f"new{i}"})
+    assert mock_summarize.called
+    dropped_users = [c.kwargs["user_content"] for c in mock_summarize.call_args_list]
+    assert "party games for 8" not in dropped_users
+    assert "2-player war games" in dropped_users
+

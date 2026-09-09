@@ -23,30 +23,33 @@ def get_conversation(session: Session, conversation_id: UUID) -> Conversation | 
     return session.get(Conversation, conversation_id)
 
 
-def count_turns(session: Session, conversation_id: UUID) -> int:
-    return int(
-        session.scalar(
-            select(func.count()).select_from(Message).where(
-                Message.conversation_id == conversation_id,
-                Message.role == "user",
-            )
-        )
-        or 0
-    )
+def count_turns(
+    session: Session,
+    conversation_id: UUID,
+    topic_started_at: datetime | None = None,
+) -> int:
+    where = [
+        Message.conversation_id == conversation_id,
+        Message.role == "user",
+    ]
+    if topic_started_at is not None:
+        where.append(Message.created_at >= topic_started_at)
+    return int(session.scalar(select(func.count()).select_from(Message).where(*where)) or 0)
 
 
 def load_recent_messages(
     session: Session,
     conversation_id: UUID,
     max_turns: int = RECENT_TURN_LIMIT,
+    topic_started_at: datetime | None = None,
 ) -> list[Message]:
     limit = max_turns * 2
+    where = [Message.conversation_id == conversation_id]
+    if topic_started_at is not None:
+        where.append(Message.created_at >= topic_started_at)
     rows = list(
         session.scalars(
-            select(Message)
-            .where(Message.conversation_id == conversation_id)
-            .order_by(Message.created_at.desc())
-            .limit(limit)
+            select(Message).where(*where).order_by(Message.created_at.desc()).limit(limit)
         )
     )
     rows.reverse()
@@ -61,6 +64,7 @@ def append_turn(
     standalone_query: str,
     assistant_content: str,
     assistant_payload: dict,
+    topic_changed: bool = False,
 ) -> None:
     now = datetime.now(UTC)
     session.add(
@@ -87,6 +91,9 @@ def append_turn(
     if conv is not None:
         conv.updated_at = now
         conv.version = int(conv.version) + 1
+        if topic_changed:
+            conv.summary = None
+            conv.topic_started_at = now
     session.flush()
 
 
@@ -101,17 +108,19 @@ def set_summary(session: Session, conversation_id: UUID, summary: str) -> None:
 
 
 def load_turn_pair_at_index(
-    session: Session, conversation_id: UUID, turn_index: int
+    session: Session,
+    conversation_id: UUID,
+    turn_index: int,
+    topic_started_at: datetime | None = None,
 ) -> tuple[Message, Message] | None:
-    """0-based turn index among user messages ordered by created_at."""
+    """0-based turn index among user messages ordered by created_at (epoch-scoped)."""
     if turn_index < 0:
         return None
+    where = [Message.conversation_id == conversation_id, Message.role == "user"]
+    if topic_started_at is not None:
+        where.append(Message.created_at >= topic_started_at)
     user = session.scalars(
-        select(Message)
-        .where(Message.conversation_id == conversation_id, Message.role == "user")
-        .order_by(Message.created_at.asc())
-        .offset(turn_index)
-        .limit(1)
+        select(Message).where(*where).order_by(Message.created_at.asc()).offset(turn_index).limit(1)
     ).first()
     if user is None:
         return None
