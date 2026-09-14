@@ -11,7 +11,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.db.models import Base, Category, CrawlStatus, Game, GameCategory
-from app.api.models import ExtractedFilters, GameRecommendation
+from app.api.models import ExtractedFilters, GameRecommendation, RECOMMEND_QUERY_MAX_CHARS
 from app.main import app
 from app.services.recommender import SynthesisOutput
 from app.state import app_state
@@ -103,6 +103,18 @@ def test_health_ok(client: TestClient) -> None:
 
 def test_recommend_empty_query_returns_422(client: TestClient) -> None:
     response = client.post("/recommend", json={"query": ""})
+    assert response.status_code == 422
+
+
+def test_recommend_overlong_query_returns_422(client: TestClient) -> None:
+    cid = _conversation_id(client)
+    response = client.post(
+        "/recommend",
+        json={
+            "query": "a" * (RECOMMEND_QUERY_MAX_CHARS + 1),
+            "conversation_id": cid,
+        },
+    )
     assert response.status_code == 422
 
 

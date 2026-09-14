@@ -12,8 +12,11 @@ class ConversationCreateResponse(BaseModel):
     id: UUID
 
 
+RECOMMEND_QUERY_MAX_CHARS = 2000
+
+
 class RecommendRequest(BaseModel):
-    query: str = Field(min_length=1)
+    query: str = Field(min_length=1, max_length=RECOMMEND_QUERY_MAX_CHARS)
     conversation_id: UUID
 
 
